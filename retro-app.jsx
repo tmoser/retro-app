@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 
 // ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -396,6 +396,32 @@ const css = `
   .join-avatar { display: flex; align-items: center; gap: 6px; background: var(--bg-raised); border-radius: 20px; padding: 4px 10px 4px 4px; }
   .join-avatar-dot { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: white; flex-shrink: 0; }
   .join-avatar-name { font-size: 13px; font-weight: 600; color: var(--text); }
+
+  /* RICH TEXT EDITOR */
+  .rte-wrap { position: relative; }
+  .rte-toolbar { display: flex; align-items: center; gap: 2px; padding: 5px 8px; background: var(--bg-raised); border: 1.5px solid var(--border); border-bottom: none; border-radius: 6px 6px 0 0; flex-wrap: wrap; }
+  .rte-btn { width: 28px; height: 28px; border-radius: 4px; border: none; background: transparent; color: var(--text-muted); font-size: 13px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .15s; font-family: 'DM Sans', sans-serif; }
+  .rte-btn:hover { background: var(--bg-input); color: var(--text); }
+  .rte-btn.active { background: var(--or-red); color: white; }
+  .rte-divider { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
+  .rte-emoji-btn { padding: 0 8px; width: auto; font-size: 15px; }
+  .rte-editor { min-height: 90px; border: 1.5px solid var(--border); border-radius: 0 0 6px 6px; padding: 12px 14px; font-family: 'DM Sans', sans-serif; font-size: 15px; color: var(--text); background: var(--bg-input); outline: none; transition: border .2s; line-height: 1.6; }
+  .rte-editor:focus { border-color: var(--or-red); box-shadow: 0 0 0 3px var(--or-red-glow); }
+  .rte-editor:empty:before { content: attr(data-placeholder); color: var(--text-dim); pointer-events: none; }
+  .rte-editor b, .rte-editor strong { font-weight: 700; color: var(--text); }
+  .rte-editor i, .rte-editor em { font-style: italic; }
+  .rte-editor ul { padding-left: 20px; margin: 4px 0; }
+  .rte-editor li { margin: 2px 0; }
+
+  /* EMOJI POPUP */
+  .emoji-popup { position: absolute; z-index: 300; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 12px; padding: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.5); width: 280px; }
+  .emoji-popup-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; max-height: 200px; overflow-y: auto; }
+  .emoji-popup-grid::-webkit-scrollbar { width: 4px; }
+  .emoji-popup-grid::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  .emoji-popup-item { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: pointer; border-radius: 6px; transition: background .1s; }
+  .emoji-popup-item:hover { background: var(--bg-raised); }
+  .emoji-popup-search { width: 100%; border: 1.5px solid var(--border); border-radius: 6px; padding: 6px 10px; font-family: 'DM Sans', sans-serif; font-size: 13px; background: var(--bg-input); color: var(--text); outline: none; margin-bottom: 8px; }
+  .emoji-popup-search:focus { border-color: var(--or-red); }
   .join-q1-section { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); text-align: left; }
   .join-q1-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); margin-bottom: 8px; }
   .join-q1-prompt { font-family: 'Libre Franklin', sans-serif; font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 14px; }
@@ -529,7 +555,10 @@ function Q1Picker({ value, onChange }) {
 
   const handleModeSwitch = (newMode) => {
     setMode(newMode);
-    onChange("");
+    // Only clear if switching away from the current value's type
+    const currentIsGif = value && typeof value === "object";
+    if (newMode === "emoji" && currentIsGif) onChange("");
+    if (newMode === "gif" && !currentIsGif) onChange("");
   };
 
   return (
@@ -569,7 +598,15 @@ function StickyCard({ card, hidden, onGroup, grouped, groupName }) {
         </div>
       )}
       {card.type === "emoji" && isGif && hidden && <div className="sticky-emoji">🎬</div>}
-      {card.type !== "emoji" && <div className="sticky-content">{hidden ? "••••••••" : card.content}</div>}
+      {card.type !== "emoji" && (
+        <div className="sticky-content">
+          {hidden ? "••••••••" : (
+            typeof card.content === "string" && card.content.startsWith("<")
+              ? <span dangerouslySetInnerHTML={{ __html: card.content }} />
+              : card.content
+          )}
+        </div>
+      )}
       {!hidden && <div className="sticky-author">— {card.author}</div>}
     </div>
   );
@@ -768,6 +805,115 @@ function EditLinkBox({ token, sprintNumber, cutoff }) {
   );
 }
 
+// ── Rich Text Editor ─────────────────────────────────────────────────────────
+
+const ALL_EMOJIS = [
+  "😀","😂","🥲","😍","🤩","😎","🤔","😬","😅","🙌","👏","🔥","💯","🚀","⚡","🎯",
+  "💪","🧠","💡","✅","❌","⚠️","📌","🔧","🐛","🎉","🏆","🌱","🌊","💥","🤝","👀",
+  "😤","😮","🥳","🫠","😵","🤯","💀","🙏","👋","✊","🫡","🎸","🌀","⏰","📊","🗓️",
+  "💬","📝","🔗","🔑","🚧","🛠️","📦","🧩","🎲","🪄","🫶","❤️","💙","💚","💛","🖤"
+];
+
+function EmojiPopup({ onSelect, onClose }) {
+  const [search, setSearch] = useState("");
+  const filtered = search
+    ? ALL_EMOJIS.filter(e => e.includes(search))
+    : ALL_EMOJIS;
+
+  useEffect(() => {
+    const handler = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  return (
+    <div className="emoji-popup">
+      <input
+        className="emoji-popup-search"
+        placeholder="Search emoji…"
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        autoFocus
+      />
+      <div className="emoji-popup-grid">
+        {filtered.map((e, i) => (
+          <div key={i} className="emoji-popup-item" onClick={() => { onSelect(e); onClose(); }}>{e}</div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RichTextEditor({ value, onChange, placeholder }) {
+  const editorRef = useRef(null);
+  const [showEmoji, setShowEmoji] = useState(false);
+  const [activeFormats, setActiveFormats] = useState({ bold: false, italic: false, list: false });
+
+  // Sync value into editor on first mount only
+  useEffect(() => {
+    if (editorRef.current && value && editorRef.current.innerHTML === "") {
+      editorRef.current.innerHTML = value;
+    }
+  }, []);
+
+  const exec = (cmd, val = null) => {
+    editorRef.current.focus();
+    document.execCommand(cmd, false, val);
+    syncFormats();
+    emitChange();
+  };
+
+  const syncFormats = () => {
+    setActiveFormats({
+      bold: document.queryCommandState("bold"),
+      italic: document.queryCommandState("italic"),
+      list: document.queryCommandState("insertUnorderedList"),
+    });
+  };
+
+  const emitChange = () => {
+    if (editorRef.current) onChange(editorRef.current.innerHTML);
+  };
+
+  const insertEmoji = (emoji) => {
+    editorRef.current.focus();
+    document.execCommand("insertText", false, emoji);
+    emitChange();
+  };
+
+  return (
+    <div className="rte-wrap">
+      <div className="rte-toolbar">
+        <button className={`rte-btn ${activeFormats.bold ? "active" : ""}`} onMouseDown={e => { e.preventDefault(); exec("bold"); }} title="Bold (⌘B)"><b>B</b></button>
+        <button className={`rte-btn ${activeFormats.italic ? "active" : ""}`} onMouseDown={e => { e.preventDefault(); exec("italic"); }} title="Italic (⌘I)"><i>I</i></button>
+        <div className="rte-divider" />
+        <button className={`rte-btn ${activeFormats.list ? "active" : ""}`} onMouseDown={e => { e.preventDefault(); exec("insertUnorderedList"); }} title="Bullet list">≡</button>
+        <div className="rte-divider" />
+        <button className="rte-btn rte-emoji-btn" onMouseDown={e => { e.preventDefault(); setShowEmoji(s => !s); }} title="Insert emoji">😊</button>
+      </div>
+      <div
+        ref={editorRef}
+        className="rte-editor"
+        contentEditable
+        suppressContentEditableWarning
+        data-placeholder={placeholder || "Type your response…"}
+        onInput={emitChange}
+        onKeyUp={syncFormats}
+        onMouseUp={syncFormats}
+        onKeyDown={e => {
+          if ((e.metaKey || e.ctrlKey) && e.key === "b") { e.preventDefault(); exec("bold"); }
+          if ((e.metaKey || e.ctrlKey) && e.key === "i") { e.preventDefault(); exec("italic"); }
+        }}
+      />
+      {showEmoji && (
+        <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 300 }}>
+          <EmojiPopup onSelect={insertEmoji} onClose={() => setShowEmoji(false)} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Submit View ───────────────────────────────────────────────────────────────
 
 // Submissions store backed by localStorage so edit links survive page reload
@@ -802,7 +948,7 @@ function SubmitView({ sprintNumber, questions, currentUser, cutoff, joinQ1 }) {
 
   // Exit without saving — clear edit param from URL and go back to fresh form
   const handleExit = () => {
-    window.history.replaceState({}, "", window.location.pathname);
+    try { window.history.replaceState({}, "", window.location.href.split("?")[0]); } catch {}
     setExited(true);
   };
 
@@ -820,10 +966,11 @@ function SubmitView({ sprintNumber, questions, currentUser, cutoff, joinQ1 }) {
   // Exited without saving
   if (exited) return (
     <div className="submit-wrap">
-      <div className="closed-wrap">
-        <div style={{ fontSize: 64 }}>👋</div>
+      <div className="success-wrap">
+        <div className="success-icon">👋</div>
         <h2>No changes made</h2>
         <p>Your original responses are still saved.</p>
+        {editToken && <EditLinkBox token={editToken} sprintNumber={sprintNumber} cutoff={cutoff} />}
       </div>
     </div>
   );
@@ -892,7 +1039,14 @@ function SubmitView({ sprintNumber, questions, currentUser, cutoff, joinQ1 }) {
           <div className="q-label" style={{ color: q.color }}>{q.label}</div>
           <div className="q-prompt">{q.prompt}</div>
           {q.type === "emoji" ? (
-            <Q1Picker value={answers[q.id]} onChange={v => setAnswer(q.id, v)} />
+            <>
+              {joinQ1 && answers[q.id] === joinQ1 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(16,185,129,.1)", border: "1px solid rgba(16,185,129,.2)", borderRadius: 6, padding: "6px 10px", marginBottom: 12, fontSize: 12, color: "var(--green)" }}>
+                  ✓ Pre-filled from your join screen — feel free to change it
+                </div>
+              )}
+              <Q1Picker value={answers[q.id]} onChange={v => setAnswer(q.id, v)} />
+            </>
           ) : (
             <>
               <AIIdeas
@@ -900,11 +1054,10 @@ function SubmitView({ sprintNumber, questions, currentUser, cutoff, joinQ1 }) {
                 sprintNumber={sprintNumber}
                 onSelect={idea => setAnswer(q.id, idea)}
               />
-              <textarea
-                className="text-input"
-                placeholder="Type your response, or pick a starter above and edit it…"
+              <RichTextEditor
                 value={answers[q.id]}
-                onChange={e => setAnswer(q.id, e.target.value)}
+                onChange={v => setAnswer(q.id, v)}
+                placeholder="Type your response, or pick a starter above and edit it…"
               />
             </>
           )}
@@ -933,7 +1086,7 @@ const AI_SUGGESTIONS = {
 const REACTION_EMOJIS = ["🔥","💯","👏","😅","🚀","💡","🤔","😬","🙌","❤️","😂","👀"];
 const AVATAR_COLORS = ["#D3002D","#1a73e8","#188038","#e37400","#7b1fa2","#0097a7","#c62828","#2e7d32"];
 
-function BoardView({ sprintNumber, members, questions }) {
+function BoardView({ sprintNumber, members, questions, currentUser, currentVibe }) {
   questions = questions || QUESTIONS(sprintNumber);
   const [cards, setCards] = useState(() => seedCards(sprintNumber));
   const [revealed, setRevealed] = useState(false);
@@ -1421,6 +1574,7 @@ export default function App() {
   });
 
   const [joinQ1, setJoinQ1] = useState("");
+  const [currentVibe, setCurrentVibe] = useState("");
 
   const handleJoin = (name, q1Val) => {
     try { localStorage.setItem("retrokit-name", name); } catch {}
@@ -1428,7 +1582,7 @@ export default function App() {
     try { localStorage.setItem("retrokit-joined", JSON.stringify(updatedJoined)); } catch {}
     setJoined(updatedJoined);
     setCurrentUser(name);
-    if (q1Val) setJoinQ1(q1Val);
+    if (q1Val) { setJoinQ1(q1Val); setCurrentVibe(q1Val); }
   };
 
   const sprintNumber = settings.sprintNumber;
@@ -1492,7 +1646,7 @@ export default function App() {
             <div className="nav-tabs">
               {[["submit", "📝 Submit"], ["board", "🗂 Board"], ["history", "📚 History"]].map(([v, label]) => (
                 <button key={v} className={`nav-tab ${view === v ? "active" : ""}`} onClick={() => {
-                  window.history.replaceState({}, "", window.location.pathname);
+                  try { window.history.replaceState({}, "", window.location.href.split("?")[0]); } catch {}
                   setView(v);
                 }}>{label}</button>
               ))}
@@ -1504,7 +1658,7 @@ export default function App() {
         {typeof window !== "undefined" && (window.__retroCutoff = cutoff) && null}
 
         {view === "submit" && <SubmitView sprintNumber={sprintNumber} questions={questionsWithSettings(sprintNumber)} currentUser={currentUser} cutoff={cutoff} joinQ1={joinQ1} />}
-        {view === "board" && <BoardView sprintNumber={sprintNumber} members={joined} questions={questionsWithSettings(sprintNumber)} currentUser={currentUser} currentVibe={currentVibe} />}
+        {view === "board" && <BoardView sprintNumber={sprintNumber} members={joined} questions={questionsWithSettings(sprintNumber)} currentUser={currentUser} currentVibe={currentVibe || ""} />}
         {view === "history" && <HistoryView onLoadSprint={(n) => { setSprintNumber(n); setView("board"); }} />}
 
         {showSettings && (
