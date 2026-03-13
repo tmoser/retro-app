@@ -343,6 +343,54 @@ const css = `
   .gif-change-btn { font-size: 12px; color: #999; text-decoration: underline; cursor: pointer; background: none; border: none; font-family: 'DM Sans', sans-serif; padding: 0; margin-top: 4px; }
   .giphy-attr { font-size: 10px; color: #bbb; text-align: right; margin-top: 4px; font-style: italic; }
 
+  /* SETTINGS */
+  .settings-gear { width: 36px; height: 36px; border-radius: 50%; border: 1.5px solid var(--border-light); background: transparent; color: var(--text-muted); font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .2s; flex-shrink: 0; }
+  .settings-gear:hover { background: var(--bg-raised); color: var(--text); border-color: var(--or-red); }
+  .settings-modal { max-width: 560px; }
+  .settings-lock { text-align: center; padding: 12px 0 4px; }
+  .settings-lock-icon { font-size: 40px; margin-bottom: 12px; }
+  .settings-lock h2 { font-family: 'Libre Franklin', sans-serif; font-size: 22px; font-weight: 800; color: var(--text); margin-bottom: 6px; }
+  .settings-lock p { color: var(--text-muted); font-size: 14px; margin-bottom: 20px; }
+  .settings-pw-row { display: flex; gap: 8px; }
+  .settings-pw-input { flex: 1; border: 1.5px solid var(--border); border-radius: 6px; padding: 10px 14px; font-family: 'DM Sans', sans-serif; font-size: 15px; background: var(--bg-input); color: var(--text); outline: none; transition: border .2s; }
+  .settings-pw-input:focus { border-color: var(--or-red); }
+  .settings-pw-error { color: var(--or-red); font-size: 13px; margin-top: 8px; text-align: center; }
+  .settings-section { margin-bottom: 24px; }
+  .settings-section-title { font-family: 'Libre Franklin', sans-serif; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  .settings-row { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+  .settings-label { font-size: 13px; font-weight: 600; color: var(--text); }
+  .settings-input { width: 100%; border: 1.5px solid var(--border); border-radius: 6px; padding: 9px 12px; font-family: 'DM Sans', sans-serif; font-size: 14px; background: var(--bg-input); color: var(--text); outline: none; transition: border .2s; }
+  .settings-input:focus { border-color: var(--or-red); }
+  .settings-select { width: 100%; border: 1.5px solid var(--border); border-radius: 6px; padding: 9px 12px; font-family: 'DM Sans', sans-serif; font-size: 14px; background: var(--bg-input); color: var(--text); outline: none; cursor: pointer; }
+  .settings-hint { font-size: 11px; color: var(--text-dim); margin-top: 3px; }
+  .settings-members { display: flex; flex-direction: column; gap: 6px; }
+  .settings-member-row { display: flex; gap: 6px; align-items: center; }
+  .settings-member-row input { flex: 1; border: 1.5px solid var(--border); border-radius: 6px; padding: 7px 10px; font-family: 'DM Sans', sans-serif; font-size: 13px; background: var(--bg-input); color: var(--text); outline: none; }
+  .settings-member-row input:focus { border-color: var(--or-red); }
+  .settings-add-member { display: flex; align-items: center; gap: 6px; color: var(--or-red); font-size: 13px; font-weight: 600; cursor: pointer; background: none; border: none; font-family: 'DM Sans', sans-serif; padding: 4px 0; margin-top: 4px; }
+  .settings-saved { display: flex; align-items: center; gap: 6px; color: var(--green); font-size: 13px; font-weight: 600; }
+
+  /* JOIN SCREEN */
+  .join-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--bg); }
+  .join-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 48px 40px; max-width: 440px; width: 100%; text-align: center; box-shadow: 0 8px 40px rgba(0,0,0,.4); }
+  .join-logo { font-family: 'Libre Franklin', sans-serif; font-size: 15px; font-weight: 800; color: var(--text-muted); letter-spacing: .5px; margin-bottom: 32px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+  .join-logo-dot { width: 8px; height: 8px; background: var(--or-red); border-radius: 50%; }
+  .join-sprint { display: inline-block; background: var(--or-red-glow); color: var(--or-red); border: 1px solid rgba(232,0,61,.25); border-radius: 20px; padding: 4px 14px; font-size: 13px; font-weight: 700; margin-bottom: 20px; }
+  .join-title { font-family: 'Libre Franklin', sans-serif; font-size: 28px; font-weight: 800; color: var(--text); margin-bottom: 8px; line-height: 1.2; }
+  .join-sub { color: var(--text-muted); font-size: 15px; margin-bottom: 32px; line-height: 1.5; }
+  .join-input { width: 100%; border: 2px solid var(--border-light); border-radius: 8px; padding: 14px 16px; font-family: 'DM Sans', sans-serif; font-size: 17px; font-weight: 600; background: var(--bg-input); color: var(--text); outline: none; transition: border .2s; text-align: center; margin-bottom: 12px; }
+  .join-input::placeholder { color: var(--text-dim); font-weight: 400; }
+  .join-input:focus { border-color: var(--or-red); box-shadow: 0 0 0 3px var(--or-red-glow); }
+  .join-btn { width: 100%; padding: 14px; background: var(--or-red); color: white; border: none; border-radius: 8px; font-family: 'Libre Franklin', sans-serif; font-size: 17px; font-weight: 800; cursor: pointer; transition: all .2s; }
+  .join-btn:hover { background: var(--or-red-dark); transform: translateY(-1px); box-shadow: 0 4px 16px rgba(232,0,61,.3); }
+  .join-btn:disabled { opacity: .4; cursor: not-allowed; transform: none; box-shadow: none; }
+  .join-presence { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--border); }
+  .join-presence-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); margin-bottom: 10px; }
+  .join-avatars { display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: wrap; }
+  .join-avatar { display: flex; align-items: center; gap: 6px; background: var(--bg-raised); border-radius: 20px; padding: 4px 10px 4px 4px; }
+  .join-avatar-dot { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: white; flex-shrink: 0; }
+  .join-avatar-name { font-size: 13px; font-weight: 600; color: var(--text); }
+
   /* REACTIONS */
   .reaction-bar { display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: var(--bg-card); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
   .reaction-bar-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #999; margin-right: 4px; }
@@ -669,15 +717,15 @@ function EditLinkBox({ token, sprintNumber }) {
 // Shared in-memory store (in production this would be a real DB)
 const submissionsStore = {};
 
-function SubmitView({ sprintNumber }) {
-  const questions = QUESTIONS(sprintNumber);
+function SubmitView({ sprintNumber, questions, currentUser }) {
+  questions = questions || QUESTIONS(sprintNumber);
 
   // Check for edit token in URL params (simulated)
   const urlParams = new URLSearchParams(window.location.search);
   const editToken = urlParams.get("edit");
   const existingSubmission = editToken && submissionsStore[editToken];
 
-  const [name, setName] = useState(existingSubmission ? existingSubmission.name : "");
+  const [name, setName] = useState(existingSubmission ? existingSubmission.name : (currentUser || ""));
   const [answers, setAnswers] = useState(
     existingSubmission ? existingSubmission.answers : { q1: "", q2: "", q3: "", q4: "" }
   );
@@ -802,8 +850,8 @@ const AI_SUGGESTIONS = {
 const REACTION_EMOJIS = ["🔥","💯","👏","😅","🚀","💡","🤔","😬","🙌","❤️","😂","👀"];
 const AVATAR_COLORS = ["#D3002D","#1a73e8","#188038","#e37400","#7b1fa2","#0097a7","#c62828","#2e7d32"];
 
-function BoardView({ sprintNumber }) {
-  const questions = QUESTIONS(sprintNumber);
+function BoardView({ sprintNumber, members, questions }) {
+  questions = questions || QUESTIONS(sprintNumber);
   const [cards, setCards] = useState(() => seedCards(sprintNumber));
   const [revealed, setRevealed] = useState(false);
   const [groups, setGroups] = useState({});
@@ -817,12 +865,10 @@ function BoardView({ sprintNumber }) {
   const [groupingCard, setGroupingCard] = useState(null);
   const [newGroupName, setNewGroupName] = useState("");
   const [reactions, setReactions] = useState([]);
-  const [presence] = useState([
-    { name: "Alex", color: AVATAR_COLORS[0] },
-    { name: "Sam", color: AVATAR_COLORS[1] },
-    { name: "Jordan", color: AVATAR_COLORS[2] },
-    { name: "Riley", color: AVATAR_COLORS[3] },
-  ]);
+  const teamMembers = members && members.length ? members : ["Alex", "Sam", "Jordan", "Riley"];
+  const [presence] = useState(() =>
+    teamMembers.filter(Boolean).map((name, i) => ({ name, color: AVATAR_COLORS[i % AVATAR_COLORS.length] }))
+  );
 
   const dropReaction = (emoji) => {
     const id = uid();
@@ -1070,11 +1116,252 @@ function HistoryView({ onLoadSprint }) {
   );
 }
 
+// ── Settings Modal ────────────────────────────────────────────────────────────
+
+const SETTINGS_PASSWORD = "retro2026";
+
+const DEFAULT_SETTINGS = {
+  sprintNumber: 13,
+  cutoffDate: "",
+  cutoffTime: "09:55",
+  q3Variant: 0,
+  members: ["Alex", "Sam", "Jordan", "Riley", "Casey", "Morgan"],
+};
+
+function loadSettings() {
+  try {
+    const s = localStorage.getItem("retrokit-settings");
+    return s ? { ...DEFAULT_SETTINGS, ...JSON.parse(s) } : { ...DEFAULT_SETTINGS };
+  } catch { return { ...DEFAULT_SETTINGS }; }
+}
+
+function saveSettings(s) {
+  try { localStorage.setItem("retrokit-settings", JSON.stringify(s)); } catch {}
+}
+
+function SettingsModal({ settings, onSave, onClose }) {
+  const [locked, setLocked] = useState(true);
+  const [pw, setPw] = useState("");
+  const [pwError, setPwError] = useState(false);
+  const [form, setForm] = useState({ ...settings });
+  const [saved, setSaved] = useState(false);
+
+  const unlock = () => {
+    if (pw === SETTINGS_PASSWORD) { setLocked(false); setPwError(false); }
+    else { setPwError(true); }
+  };
+
+  const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
+
+  const handleSave = () => {
+    onSave(form);
+    setSaved(true);
+    setTimeout(() => { setSaved(false); onClose(); }, 1000);
+  };
+
+  const updateMember = (i, val) => {
+    const m = [...form.members];
+    m[i] = val;
+    set("members", m);
+  };
+
+  const addMember = () => set("members", [...form.members, ""]);
+  const removeMember = (i) => set("members", form.members.filter((_, j) => j !== i));
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal settings-modal" onClick={e => e.stopPropagation()}>
+        {locked ? (
+          <div className="settings-lock">
+            <div className="settings-lock-icon">⚙️</div>
+            <h2>Settings</h2>
+            <p>Enter the facilitator password to make changes.</p>
+            <div className="settings-pw-row">
+              <input
+                className="settings-pw-input"
+                type="password"
+                placeholder="Password"
+                value={pw}
+                onChange={e => { setPw(e.target.value); setPwError(false); }}
+                onKeyDown={e => e.key === "Enter" && unlock()}
+                autoFocus
+              />
+              <button className="tool-btn primary" onClick={unlock}>Unlock</button>
+            </div>
+            {pwError && <div className="settings-pw-error">Incorrect password</div>}
+            <div className="modal-btns" style={{ justifyContent: "center", marginTop: 16 }}>
+              <button className="tool-btn" onClick={onClose}>Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <h2>⚙️ Settings</h2>
+            <p>Changes apply immediately after saving.</p>
+
+            <div className="settings-section">
+              <div className="settings-section-title">Sprint</div>
+              <div className="settings-row">
+                <label className="settings-label">Sprint number</label>
+                <input className="settings-input" type="number" min="1"
+                  value={form.sprintNumber}
+                  onChange={e => set("sprintNumber", parseInt(e.target.value) || 1)} />
+              </div>
+            </div>
+
+            <div className="settings-section">
+              <div className="settings-section-title">Submission cutoff</div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <div className="settings-row" style={{ flex: 2 }}>
+                  <label className="settings-label">Date</label>
+                  <input className="settings-input" type="date"
+                    value={form.cutoffDate}
+                    onChange={e => set("cutoffDate", e.target.value)} />
+                </div>
+                <div className="settings-row" style={{ flex: 1 }}>
+                  <label className="settings-label">Time</label>
+                  <input className="settings-input" type="time"
+                    value={form.cutoffTime}
+                    onChange={e => set("cutoffTime", e.target.value)} />
+                </div>
+              </div>
+              <div className="settings-hint">Set to ~5 minutes before your retro starts.</div>
+            </div>
+
+            <div className="settings-section">
+              <div className="settings-section-title">Rotating question (Q3)</div>
+              <div className="settings-row">
+                <label className="settings-label">Active variant</label>
+                <select className="settings-select"
+                  value={form.q3Variant}
+                  onChange={e => set("q3Variant", parseInt(e.target.value))}>
+                  {Q3_VARIANTS.map((q, i) => (
+                    <option key={i} value={i}>{q}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+
+            <div className="modal-btns">
+              <button className="tool-btn" onClick={onClose}>Cancel</button>
+              {saved
+                ? <span className="settings-saved">✓ Saved!</span>
+                : <button className="tool-btn primary" onClick={handleSave}>Save changes</button>
+              }
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Join Screen ───────────────────────────────────────────────────────────────
+
+function JoinScreen({ sprintNumber, onJoin, joined }) {
+  const [name, setName] = useState("");
+
+  const handleJoin = () => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    onJoin(trimmed);
+  };
+
+  return (
+    <div className="join-wrap">
+      <div className="join-card">
+        <div className="join-logo"><span className="join-logo-dot" />RetroKit</div>
+        <div className="join-sprint">Sprint {sprintNumber}</div>
+        <div className="join-title">What should we call you?</div>
+        <div className="join-sub">Enter any name — it'll appear on your cards and in the session.</div>
+        <input
+          className="join-input"
+          placeholder="Your name…"
+          value={name}
+          onChange={e => setName(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && handleJoin()}
+          maxLength={30}
+          autoFocus
+        />
+        <button className="join-btn" disabled={!name.trim()} onClick={handleJoin}>
+          Join Session →
+        </button>
+        {joined.length > 0 && (
+          <div className="join-presence">
+            <div className="join-presence-label">Already joined</div>
+            <div className="join-avatars">
+              {joined.map((p, i) => (
+                <div key={i} className="join-avatar">
+                  <div className="join-avatar-dot" style={{ background: AVATAR_COLORS[i % AVATAR_COLORS.length] }}>{p[0]}</div>
+                  <span className="join-avatar-name">{p}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── App Shell ─────────────────────────────────────────────────────────────────
 
 export default function App() {
   const [view, setView] = useState("submit");
-  const [sprintNumber, setSprintNumber] = useState(13);
+  const [showSettings, setShowSettings] = useState(false);
+  const [settings, setSettings] = useState(loadSettings);
+  const [currentUser, setCurrentUser] = useState(() => {
+    try { return localStorage.getItem("retrokit-name") || null; } catch { return null; }
+  });
+  const [joined, setJoined] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("retrokit-joined") || "[]"); } catch { return []; }
+  });
+
+  const handleJoin = (name) => {
+    try { localStorage.setItem("retrokit-name", name); } catch {}
+    const updatedJoined = joined.includes(name) ? joined : [...joined, name];
+    try { localStorage.setItem("retrokit-joined", JSON.stringify(updatedJoined)); } catch {}
+    setJoined(updatedJoined);
+    setCurrentUser(name);
+  };
+
+  const sprintNumber = settings.sprintNumber;
+  const setSprintNumber = (fn) => setSettings(s => {
+    const next = { ...s, sprintNumber: typeof fn === "function" ? fn(s.sprintNumber) : fn };
+    saveSettings(next);
+    return next;
+  });
+
+  const handleSaveSettings = (newSettings) => {
+    saveSettings(newSettings);
+    setSettings(newSettings);
+  };
+
+  const cutoff = settings.cutoffDate && settings.cutoffTime
+    ? new Date(`${settings.cutoffDate}T${settings.cutoffTime}`)
+    : DEMO_CUTOFF;
+
+  // Override QUESTIONS to use settings q3Variant and members
+  const settingsQ3 = Q3_VARIANTS[settings.q3Variant] || Q3_VARIANTS[0];
+  const questionsWithSettings = (sprintNum) => [
+    { id: "q1", label: "Q1", prompt: "Describe the sprint using an emoji or gif", type: "emoji", color: "#FFD93D" },
+    { id: "q2", label: "Q2", prompt: "What were our standout achievements this sprint?", type: "text", color: "#6BCB77" },
+    { id: "q3", label: "Q3", prompt: settingsQ3, type: "text", color: "#FF6B6B" },
+    { id: "q4", label: "Q4", prompt: "Anything else? Is there anyone you'd like to give a shout-out to?", type: "text", color: "#4D96FF" },
+  ];
+
+  if (!currentUser) {
+    return (
+      <>
+        <style>{css}</style>
+        <JoinScreen
+          sprintNumber={settings.sprintNumber}
+          onJoin={handleJoin}
+          joined={joined}
+        />
+      </>
+    );
+  }
 
   return (
     <>
@@ -1083,23 +1370,39 @@ export default function App() {
         <nav className="nav">
           <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
             <div className="nav-brand"><span className="nav-brand-dot" />RetroKit</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--bg-raised)", borderRadius: 20, padding: "4px 12px 4px 4px", border: "1px solid var(--border)" }}>
+              <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--or-red)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white" }}>{currentUser[0]}</div>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{currentUser}</span>
+              <button onClick={() => { try { localStorage.removeItem("retrokit-name"); } catch {} setCurrentUser(null); }} style={{ background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer", fontSize: 13, padding: 0, marginLeft: 2 }} title="Leave session">✕</button>
+            </div>
             <div className="sprint-selector">
               <button onClick={() => setSprintNumber(n => Math.max(1, n - 1))}>−</button>
               <span>Sprint {sprintNumber}</span>
               <button onClick={() => setSprintNumber(n => n + 1)}>+</button>
             </div>
           </div>
-          <div className="nav-tabs">
-            {[["submit", "📝 Submit"], ["board", "🗂 Board"], ["history", "📚 History"]].map(([v, label]) => (
-              <button key={v} className={`nav-tab ${view === v ? "active" : ""}`} onClick={() => setView(v)}>{label}</button>
-            ))}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div className="nav-tabs">
+              {[["submit", "📝 Submit"], ["board", "🗂 Board"], ["history", "📚 History"]].map(([v, label]) => (
+                <button key={v} className={`nav-tab ${view === v ? "active" : ""}`} onClick={() => setView(v)}>{label}</button>
+              ))}
+            </div>
+            <button className="settings-gear" onClick={() => setShowSettings(true)} title="Settings">⚙️</button>
           </div>
         </nav>
-        <CountdownBar cutoff={DEMO_CUTOFF} />
+        <CountdownBar cutoff={cutoff} />
 
-        {view === "submit" && <SubmitView sprintNumber={sprintNumber} />}
-        {view === "board" && <BoardView sprintNumber={sprintNumber} />}
+        {view === "submit" && <SubmitView sprintNumber={sprintNumber} questions={questionsWithSettings(sprintNumber)} currentUser={currentUser} />}
+        {view === "board" && <BoardView sprintNumber={sprintNumber} members={joined} questions={questionsWithSettings(sprintNumber)} currentUser={currentUser} />}
         {view === "history" && <HistoryView onLoadSprint={(n) => { setSprintNumber(n); setView("board"); }} />}
+
+        {showSettings && (
+          <SettingsModal
+            settings={settings}
+            onSave={handleSaveSettings}
+            onClose={() => setShowSettings(false)}
+          />
+        )}
       </div>
     </>
   );
