@@ -210,7 +210,13 @@ const css = `
   .copy-btn { padding: 8px 14px; background: var(--or-red); color: white; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 13px; white-space: nowrap; transition: all .2s; }
   .copy-btn:hover { background: var(--or-red-dark); }
   .copy-btn.copied { background: #2e7d32; color: white; }
-  .cutoff-notice { font-size: 12px; color: #f59e0b; font-weight: 600; margin-top: 10px; display: flex; align-items: center; gap: 4px; }
+  .cutoff-notice { font-size: 12px; font-weight: 600; margin-top: 10px; display: flex; align-items: center; gap: 4px; color: #f59e0b; }
+  .cutoff-live { font-size: 13px; }
+  .cutoff-live.open { color: #5cb85c; }
+  .cutoff-live.soon { color: #e8a020; }
+  .cutoff-live.urgent { color: #ff4444; animation: bar-pulse 1.4s ease-in-out infinite; }
+  .cutoff-live.closed { color: var(--text-dim); }
+  .cutoff-live strong { font-family: 'Libre Franklin', sans-serif; letter-spacing: .5px; }
 
   /* CONFIRM MODAL */
   .confirm-summary { background: var(--bg-raised); border-radius: 12px; padding: 16px; margin: 16px 0; display: flex; flex-direction: column; gap: 10px; }
@@ -390,6 +396,11 @@ const css = `
   .join-avatar { display: flex; align-items: center; gap: 6px; background: var(--bg-raised); border-radius: 20px; padding: 4px 10px 4px 4px; }
   .join-avatar-dot { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: white; flex-shrink: 0; }
   .join-avatar-name { font-size: 13px; font-weight: 600; color: var(--text); }
+  .join-q1-section { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); text-align: left; }
+  .join-q1-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); margin-bottom: 8px; }
+  .join-q1-prompt { font-family: 'Libre Franklin', sans-serif; font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 14px; }
+  .join-greeting { font-size: 40px; margin-bottom: 10px; }
+  .join-greeting-text { font-size: 16px; color: var(--text-muted); margin-bottom: 24px; }
 
   /* REACTIONS */
   .reaction-bar { display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: var(--bg-card); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
@@ -407,8 +418,31 @@ const css = `
 
 // ── Components ────────────────────────────────────────────────────────────────
 
-// Giphy public beta key (fine for prototyping)
-const GIPHY_KEY = "dc6zaTOxFJmzC";
+// Giphy — uses Tenor API (no key needed, CORS-friendly) as primary, Giphy beta as fallback
+async function searchGifs(query) {
+  try {
+    const res = await fetch(
+      `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(query)}&key=AIzaSyAyimkuYQYF_FXVALexPuGQctUWRURdCDY&limit=12&media_filter=gif`
+    );
+    const data = await res.json();
+    if (data.results && data.results.length > 0) {
+      return data.results.map(r => ({
+        id: r.id,
+        title: r.content_description || query,
+        images: { fixed_height_small: { url: r.media_formats?.tinygif?.url || r.media_formats?.gif?.url } }
+      }));
+    }
+  } catch {}
+  // fallback to Giphy
+  try {
+    const res = await fetch(
+      `https://api.giphy.com/v1/gifs/search?api_key=Lat2X82BQoZI8UZnG0cHU2QnlITbWYr3&q=${encodeURIComponent(query)}&limit=12&rating=g`
+    );
+    const data = await res.json();
+    return data.data || [];
+  } catch {}
+  return [];
+}
 
 function GifPicker({ value, onChange }) {
   const [query, setQuery] = useState("");
@@ -421,15 +455,8 @@ function GifPicker({ value, onChange }) {
     if (!query.trim()) return;
     setLoading(true);
     setSearched(true);
-    try {
-      const res = await fetch(
-        `https://api.giphy.com/v1/gifs/search?api_key=${GIPHY_KEY}&q=${encodeURIComponent(query)}&limit=12&rating=g`
-      );
-      const data = await res.json();
-      setResults(data.data || []);
-    } catch {
-      setResults([]);
-    }
+    const found = await searchGifs(query);
+    setResults(found);
     setLoading(false);
   };
 
@@ -694,20 +721,27 @@ function ConfirmModal({ answers, questions, onConfirm, onCancel }) {
   );
 }
 
-function EditLinkBox({ token, sprintNumber }) {
+function EditLinkBox({ token, sprintNumber, cutoff }) {
   const editUrl = `${window.location.origin}${window.location.pathname}?edit=${token}&sprint=${sprintNumber}`;
+  const ms = useCountdown(cutoff);
+  const { state } = relaxedLabel(ms);
+  const exact = exactTime(ms);
+  const stateColors = { open: "#5cb85c", soon: "#e8a020", urgent: "#ff4444", closed: "#666" };
+  const color = stateColors[state] || "#666";
   return (
     <div className="edit-link-box">
       <h3>🔗 Your personal edit link</h3>
       <p>
-        Save this link if you want to come back and update your responses before the cutoff.
-        It works only on this device — bookmark it or paste it somewhere safe.
+        Save this link to come back and update your responses before the cutoff.
+        Bookmark it or paste it somewhere safe.
       </p>
       <div className="edit-link-copy-row">
         <div className="edit-link-url" title={editUrl}>{editUrl}</div>
         <CopyButton text={editUrl} />
       </div>
-      <div className="cutoff-notice">⏰ Submissions close 5 minutes before the retro starts</div>
+      <div className="cutoff-notice" style={{ color, display: "flex", alignItems: "center", gap: 6 }}>
+        ⏰ {ms <= 0 ? "Submissions are now closed" : <>Submissions close in <strong style={{ fontFamily: "'Libre Franklin', sans-serif", letterSpacing: 1 }}>{exact}</strong></>}
+      </div>
     </div>
   );
 }
@@ -717,8 +751,9 @@ function EditLinkBox({ token, sprintNumber }) {
 // Shared in-memory store (in production this would be a real DB)
 const submissionsStore = {};
 
-function SubmitView({ sprintNumber, questions, currentUser }) {
+function SubmitView({ sprintNumber, questions, currentUser, cutoff, joinQ1 }) {
   questions = questions || QUESTIONS(sprintNumber);
+  cutoff = cutoff || DEMO_CUTOFF;
 
   // Check for edit token in URL params (simulated)
   const urlParams = new URLSearchParams(window.location.search);
@@ -727,16 +762,23 @@ function SubmitView({ sprintNumber, questions, currentUser }) {
 
   const [name, setName] = useState(existingSubmission ? existingSubmission.name : (currentUser || ""));
   const [answers, setAnswers] = useState(
-    existingSubmission ? existingSubmission.answers : { q1: "", q2: "", q3: "", q4: "" }
+    existingSubmission ? existingSubmission.answers : { q1: joinQ1 || "", q2: "", q3: "", q4: "" }
   );
   const [showConfirm, setShowConfirm] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [editLink, setEditLink] = useState(existingSubmission ? { token: editToken } : null);
+  const [exited, setExited] = useState(false);
   const isEditing = !!existingSubmission;
   const isOpen = isSubmissionOpen();
 
+  // Exit without saving — clear edit param from URL and go back to fresh form
+  const handleExit = () => {
+    window.history.replaceState({}, "", window.location.pathname);
+    setExited(true);
+  };
+
   const setAnswer = (id, val) => setAnswers(a => ({ ...a, [id]: val }));
-  const canSubmit = name.trim() && answers.q1 && (answers.q2 || answers.q3 || answers.q4);
+  const canSubmit = name.trim(); // all questions are optional
 
   const handleSubmit = () => {
     const token = editToken || generateEditToken();
@@ -745,6 +787,17 @@ function SubmitView({ sprintNumber, questions, currentUser }) {
     setSubmitted(true);
     setShowConfirm(false);
   };
+
+  // Exited without saving
+  if (exited) return (
+    <div className="submit-wrap">
+      <div className="closed-wrap">
+        <div style={{ fontSize: 64 }}>👋</div>
+        <h2>No changes made</h2>
+        <p>Your original responses are still saved.</p>
+      </div>
+    </div>
+  );
 
   // Closed state
   if (!isOpen && !isEditing) return (
@@ -764,7 +817,7 @@ function SubmitView({ sprintNumber, questions, currentUser }) {
         <div className="success-icon">{isEditing ? "✏️" : "🎉"}</div>
         <h2>{isEditing ? "Responses updated!" : "You're all set!"}</h2>
         <p>Your responses have been submitted anonymously.<br />See you at the retro!</p>
-        {editLink && <EditLinkBox token={editLink.token} sprintNumber={sprintNumber} />}
+        {editLink && <EditLinkBox token={editLink.token} sprintNumber={sprintNumber} cutoff={cutoff} />}
       </div>
     </div>
   );
@@ -799,8 +852,9 @@ function SubmitView({ sprintNumber, questions, currentUser }) {
       </div>
 
       {isEditing && (
-        <div className="editing-banner">
-          ✏️ You're <strong>editing</strong> your previous responses. Changes will replace your original submission.
+        <div className="editing-banner" style={{ justifyContent: "space-between" }}>
+          <span>✏️ You're <strong>editing</strong> your previous responses. Changes will replace your original submission.</span>
+          <button onClick={handleExit} style={{ background: "none", border: "1px solid var(--border-light)", borderRadius: 6, padding: "4px 10px", color: "var(--text-muted)", fontSize: 12, cursor: "pointer", whiteSpace: "nowrap", marginLeft: 12 }}>Exit without saving</button>
         </div>
       )}
 
@@ -867,7 +921,7 @@ function BoardView({ sprintNumber, members, questions }) {
   const [reactions, setReactions] = useState([]);
   const teamMembers = members && members.length ? members : ["Alex", "Sam", "Jordan", "Riley"];
   const [presence] = useState(() =>
-    teamMembers.filter(Boolean).map((name, i) => ({ name, color: AVATAR_COLORS[i % AVATAR_COLORS.length] }))
+    teamMembers.filter(Boolean).map((m, i) => ({ name: typeof m === "object" ? m.name : m, vibe: typeof m === "object" ? m.vibe : null, color: AVATAR_COLORS[i % AVATAR_COLORS.length] }))
   );
 
   const dropReaction = (emoji) => {
@@ -908,7 +962,7 @@ function BoardView({ sprintNumber, members, questions }) {
         {presence.map((p, i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 5 }}>
             <div className="presence-avatar" style={{ background: p.color }}>{p.name[0]}</div>
-            <span className="presence-name">{p.name}</span>
+            <span className="presence-name">{p.name}{p.vibe ? ` ${p.vibe}` : ""}</span>
           </div>
         ))}
         <span style={{ marginLeft: "auto", color: "#bbb", fontSize: 11 }}>Demo — 4 participants</span>
@@ -1258,34 +1312,54 @@ function SettingsModal({ settings, onSave, onClose }) {
 
 // ── Join Screen ───────────────────────────────────────────────────────────────
 
-function JoinScreen({ sprintNumber, onJoin, joined }) {
+function getTimeOfDay() {
+  const h = new Date().getHours();
+  if (h >= 5  && h < 12) return { greeting: "Good morning",  emoji: "🌅" };
+  if (h >= 12 && h < 17) return { greeting: "Good afternoon", emoji: "☀️" };
+  if (h >= 17 && h < 21) return { greeting: "Good evening",  emoji: "🌆" };
+  return { greeting: "Burning the midnight oil?", emoji: "🌙" };
+}
+
+function JoinScreen({ sprintNumber, onJoin, joined, sprintDate }) {
   const [name, setName] = useState("");
+  const [q1Val, setQ1Val] = useState("");
+  const { greeting, emoji } = getTimeOfDay();
 
   const handleJoin = () => {
-    const trimmed = name.trim();
+    const trimmed = name.trim().slice(0, 20);
     if (!trimmed) return;
-    onJoin(trimmed);
+    onJoin(trimmed, q1Val);
   };
 
   return (
     <div className="join-wrap">
       <div className="join-card">
         <div className="join-logo"><span className="join-logo-dot" />RetroKit</div>
-        <div className="join-sprint">Sprint {sprintNumber}</div>
+        <div className="join-sprint">Sprint {sprintNumber}{sprintDate ? ` · ${sprintDate}` : ""}</div>
+        <div className="join-greeting">{emoji}</div>
+        <div className="join-greeting-text">{greeting}! Join the retro session below.</div>
         <div className="join-title">What should we call you?</div>
-        <div className="join-sub">Enter any name — it'll appear on your cards and in the session.</div>
         <input
           className="join-input"
-          placeholder="Your name…"
+          placeholder="Your name (max 20 chars)…"
           value={name}
-          onChange={e => setName(e.target.value)}
+          onChange={e => setName(e.target.value.slice(0, 20))}
           onKeyDown={e => e.key === "Enter" && handleJoin()}
-          maxLength={30}
+          maxLength={20}
           autoFocus
         />
-        <button className="join-btn" disabled={!name.trim()} onClick={handleJoin}>
-          Join Session →
-        </button>
+        {name.trim().length > 0 && (
+          <div className="join-q1-section">
+            <div className="join-q1-label">Optional · Q1</div>
+            <div className="join-q1-prompt">Describe the sprint using an emoji or gif</div>
+            <Q1Picker value={q1Val} onChange={setQ1Val} />
+          </div>
+        )}
+        <div style={{ marginTop: 20 }}>
+          <button className="join-btn" disabled={!name.trim()} onClick={handleJoin}>
+            Join Session →
+          </button>
+        </div>
         {joined.length > 0 && (
           <div className="join-presence">
             <div className="join-presence-label">Already joined</div>
@@ -1317,12 +1391,15 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem("retrokit-joined") || "[]"); } catch { return []; }
   });
 
-  const handleJoin = (name) => {
+  const [joinQ1, setJoinQ1] = useState("");
+
+  const handleJoin = (name, q1Val) => {
     try { localStorage.setItem("retrokit-name", name); } catch {}
     const updatedJoined = joined.includes(name) ? joined : [...joined, name];
     try { localStorage.setItem("retrokit-joined", JSON.stringify(updatedJoined)); } catch {}
     setJoined(updatedJoined);
     setCurrentUser(name);
+    if (q1Val) setJoinQ1(q1Val);
   };
 
   const sprintNumber = settings.sprintNumber;
@@ -1358,6 +1435,7 @@ export default function App() {
           sprintNumber={settings.sprintNumber}
           onJoin={handleJoin}
           joined={joined}
+          sprintDate={settings.cutoffDate ? new Date(settings.cutoffDate + "T12:00:00").toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "2-digit" }) : ""}
         />
       </>
     );
@@ -1377,7 +1455,7 @@ export default function App() {
             </div>
             <div className="sprint-selector">
               <button onClick={() => setSprintNumber(n => Math.max(1, n - 1))}>−</button>
-              <span>Sprint {sprintNumber}</span>
+              <span>Sprint {sprintNumber}{settings.cutoffDate ? ` · ${new Date(settings.cutoffDate + "T12:00:00").toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "2-digit" })}` : ""}</span>
               <button onClick={() => setSprintNumber(n => n + 1)}>+</button>
             </div>
           </div>
@@ -1391,9 +1469,10 @@ export default function App() {
           </div>
         </nav>
         <CountdownBar cutoff={cutoff} />
+        {typeof window !== "undefined" && (window.__retroCutoff = cutoff) && null}
 
-        {view === "submit" && <SubmitView sprintNumber={sprintNumber} questions={questionsWithSettings(sprintNumber)} currentUser={currentUser} />}
-        {view === "board" && <BoardView sprintNumber={sprintNumber} members={joined} questions={questionsWithSettings(sprintNumber)} currentUser={currentUser} />}
+        {view === "submit" && <SubmitView sprintNumber={sprintNumber} questions={questionsWithSettings(sprintNumber)} currentUser={currentUser} cutoff={cutoff} joinQ1={joinQ1} />}
+        {view === "board" && <BoardView sprintNumber={sprintNumber} members={joined} questions={questionsWithSettings(sprintNumber)} currentUser={currentUser} currentVibe={currentVibe} />}
         {view === "history" && <HistoryView onLoadSprint={(n) => { setSprintNumber(n); setView("board"); }} />}
 
         {showSettings && (
