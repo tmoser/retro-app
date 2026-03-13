@@ -578,29 +578,50 @@ function StickyCard({ card, hidden, onGroup, grouped, groupName }) {
 // ── AI Ideas Generator ───────────────────────────────────────────────────────
 
 async function fetchIdeas(question, sprintNumber) {
-  const systemPrompt = `You are a helpful assistant for engineering sprint retrospectives. 
-Generate exactly 3 short, concrete starter responses for the given retro question. 
-Each should be 1-2 sentences, opinionated but professional, and feel like something a real engineer would write.
-Vary the tone: one positive, one critical/constructive, one forward-looking.
-Return ONLY a JSON array of 3 strings, no other text or markdown.`;
+  // Uses a simple word-association approach client-side — no API needed
+  const starters = {
+    achievements: [
+      `We finally shipped the feature that's been in progress for weeks — solid execution from the whole team.`,
+      `Collaboration was strong this sprint, but we need to be more realistic about what we can actually finish.`,
+      `The technical debt we paid down this sprint will save us significant time next quarter.`
+    ],
+    start: [
+      `Start doing async design reviews before sprint planning so we catch issues earlier.`,
+      `We should start time-boxing exploratory tasks — they tend to sprawl without a hard limit.`,
+      `Start sharing blockers in the standup channel same-day instead of waiting for the next sync.`
+    ],
+    stop: [
+      `Stop pulling in stretch tickets without checking team capacity first.`,
+      `Stop context-switching mid-sprint — it's killing our focus time.`,
+      `Stop leaving PRs open for more than 24 hours without a reviewer assigned.`
+    ],
+    continue: [
+      `Keep the daily standup short and focused — it's one of the few rituals that actually works.`,
+      `The pairing sessions this sprint were really effective, let's keep that going.`,
+      `Continue the async-first communication approach — it's reduced interruptions noticeably.`
+    ],
+    shoutout: [
+      `Shoutout to the folks who stayed focused even when things got chaotic mid-sprint.`,
+      `Big thanks to whoever documented that gnarly bug fix — future us will appreciate it.`,
+      `Recognition to the team for being proactive about unblocking each other this sprint.`
+    ],
+    default: [
+      `This sprint felt more focused than usual — the prep work beforehand really paid off.`,
+      `We need to get better at flagging risks earlier rather than discovering them at the end.`,
+      `One thing worth trying: a quick team check-in at the midpoint of each sprint.`
+    ]
+  };
 
-  const userPrompt = `Sprint ${sprintNumber} retro question: "${question}"
-Generate 3 starter response ideas a team member could use or adapt.`;
+  const q = question.toLowerCase();
+  let bank = starters.default;
+  if (q.includes("achiev") || q.includes("standout") || q.includes("win")) bank = starters.achievements;
+  else if (q.includes("start")) bank = starters.start;
+  else if (q.includes("stop")) bank = starters.stop;
+  else if (q.includes("continue") || q.includes("working")) bank = starters.continue;
+  else if (q.includes("shout") || q.includes("anything else")) bank = starters.shoutout;
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 400,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }]
-    })
-  });
-  const data = await res.json();
-  const raw = data.content?.[0]?.text || "[]";
-  const clean = raw.replace(/```json|```/g, "").trim();
-  return JSON.parse(clean);
+  // Shuffle slightly so it feels fresh each time
+  return [...bank].sort(() => Math.random() - 0.5).slice(0, 3);
 }
 
 function AIIdeas({ question, sprintNumber, onSelect }) {
@@ -615,7 +636,7 @@ function AIIdeas({ question, sprintNumber, onSelect }) {
       const result = await fetchIdeas(question, sprintNumber);
       setIdeas(result);
     } catch {
-      setIdeas(["Couldn't generate ideas — try again or write your own!"]);
+      setIdeas(["Something went wrong — try again or write your own!"]);
     }
     setLoading(false);
   };
@@ -722,7 +743,8 @@ function ConfirmModal({ answers, questions, onConfirm, onCancel }) {
 }
 
 function EditLinkBox({ token, sprintNumber, cutoff }) {
-  const editUrl = `${window.location.origin}${window.location.pathname}?edit=${token}&sprint=${sprintNumber}`;
+  const basePath = window.location.origin + window.location.pathname.replace(/\?.*$/, '');
+  const editUrl = `${basePath}?edit=${token}&sprint=${sprintNumber}`;
   const ms = useCountdown(cutoff);
   const { state } = relaxedLabel(ms);
   const exact = exactTime(ms);
@@ -748,8 +770,15 @@ function EditLinkBox({ token, sprintNumber, cutoff }) {
 
 // ── Submit View ───────────────────────────────────────────────────────────────
 
-// Shared in-memory store (in production this would be a real DB)
-const submissionsStore = {};
+// Submissions store backed by localStorage so edit links survive page reload
+const submissionsStore = {
+  get(token) {
+    try { return JSON.parse(localStorage.getItem("rk_sub_" + token) || "null"); } catch { return null; }
+  },
+  set(token, data) {
+    try { localStorage.setItem("rk_sub_" + token, JSON.stringify(data)); } catch {}
+  }
+};
 
 function SubmitView({ sprintNumber, questions, currentUser, cutoff, joinQ1 }) {
   questions = questions || QUESTIONS(sprintNumber);
@@ -758,7 +787,7 @@ function SubmitView({ sprintNumber, questions, currentUser, cutoff, joinQ1 }) {
   // Check for edit token in URL params (simulated)
   const urlParams = new URLSearchParams(window.location.search);
   const editToken = urlParams.get("edit");
-  const existingSubmission = editToken && submissionsStore[editToken];
+  const existingSubmission = editToken ? submissionsStore.get(editToken) : null;
 
   const [name, setName] = useState(existingSubmission ? existingSubmission.name : (currentUser || ""));
   const [answers, setAnswers] = useState(
@@ -782,7 +811,7 @@ function SubmitView({ sprintNumber, questions, currentUser, cutoff, joinQ1 }) {
 
   const handleSubmit = () => {
     const token = editToken || generateEditToken();
-    submissionsStore[token] = { name: name.trim(), answers, sprintNumber, submittedAt: new Date() };
+    submissionsStore.set(token, { name: name.trim(), answers, sprintNumber, submittedAt: new Date().toISOString() });
     setEditLink({ token });
     setSubmitted(true);
     setShowConfirm(false);
@@ -816,7 +845,7 @@ function SubmitView({ sprintNumber, questions, currentUser, cutoff, joinQ1 }) {
       <div className="success-wrap">
         <div className="success-icon">{isEditing ? "✏️" : "🎉"}</div>
         <h2>{isEditing ? "Responses updated!" : "You're all set!"}</h2>
-        <p>Your responses have been submitted anonymously.<br />See you at the retro!</p>
+        <p>Your responses have been saved.<br />See you at the retro!</p>
         {editLink && <EditLinkBox token={editLink.token} sprintNumber={sprintNumber} cutoff={cutoff} />}
       </div>
     </div>
@@ -1462,7 +1491,10 @@ export default function App() {
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div className="nav-tabs">
               {[["submit", "📝 Submit"], ["board", "🗂 Board"], ["history", "📚 History"]].map(([v, label]) => (
-                <button key={v} className={`nav-tab ${view === v ? "active" : ""}`} onClick={() => setView(v)}>{label}</button>
+                <button key={v} className={`nav-tab ${view === v ? "active" : ""}`} onClick={() => {
+                  window.history.replaceState({}, "", window.location.pathname);
+                  setView(v);
+                }}>{label}</button>
               ))}
             </div>
             <button className="settings-gear" onClick={() => setShowSettings(true)} title="Settings">⚙️</button>
