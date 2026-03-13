@@ -844,10 +844,11 @@ function EmojiPopup({ onSelect, onClose }) {
   );
 }
 
-function RichTextEditor({ value, onChange, placeholder }) {
+function RichTextEditor({ value, onChange, placeholder, injectText }) {
   const editorRef = useRef(null);
   const [showEmoji, setShowEmoji] = useState(false);
   const [activeFormats, setActiveFormats] = useState({ bold: false, italic: false, list: false });
+  const prevInjectRef = useRef(injectText);
 
   // Sync value into editor on first mount only
   useEffect(() => {
@@ -855,6 +856,23 @@ function RichTextEditor({ value, onChange, placeholder }) {
       editorRef.current.innerHTML = value;
     }
   }, []);
+
+  // When injectText changes (AI idea selected), set it into the editor
+  useEffect(() => {
+    if (injectText && injectText !== prevInjectRef.current && editorRef.current) {
+      editorRef.current.innerHTML = injectText;
+      onChange(injectText);
+      prevInjectRef.current = injectText;
+      editorRef.current.focus();
+      // Move cursor to end
+      const range = document.createRange();
+      const sel = window.getSelection();
+      range.selectNodeContents(editorRef.current);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  }, [injectText]);
 
   const exec = (cmd, val = null) => {
     editorRef.current.focus();
@@ -939,6 +957,12 @@ function SubmitView({ sprintNumber, questions, currentUser, cutoff, joinQ1 }) {
   const [answers, setAnswers] = useState(
     existingSubmission ? existingSubmission.answers : { q1: joinQ1 || "", q2: "", q3: "", q4: "" }
   );
+  const [injected, setInjected] = useState({ q1: "", q2: "", q3: "", q4: "" });
+
+  const injectIdea = (qId, text) => {
+    setAnswer(qId, text);
+    setInjected(i => ({ ...i, [qId]: text + "_" + Date.now() })); // unique to trigger effect
+  };
   const [showConfirm, setShowConfirm] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [editLink, setEditLink] = useState(existingSubmission ? { token: editToken } : null);
@@ -1052,12 +1076,13 @@ function SubmitView({ sprintNumber, questions, currentUser, cutoff, joinQ1 }) {
               <AIIdeas
                 question={q.prompt}
                 sprintNumber={sprintNumber}
-                onSelect={idea => setAnswer(q.id, idea)}
+                onSelect={idea => injectIdea(q.id, idea)}
               />
               <RichTextEditor
                 value={answers[q.id]}
                 onChange={v => setAnswer(q.id, v)}
                 placeholder="Type your response, or pick a starter above and edit it…"
+                injectText={injected[q.id]}
               />
             </>
           )}
@@ -1088,7 +1113,29 @@ const AVATAR_COLORS = ["#D3002D","#1a73e8","#188038","#e37400","#7b1fa2","#0097a
 
 function BoardView({ sprintNumber, members, questions, currentUser, currentVibe }) {
   questions = questions || QUESTIONS(sprintNumber);
-  const [cards, setCards] = useState(() => seedCards(sprintNumber));
+  const [cards, setCards] = useState(() => {
+    // Load real submissions from localStorage
+    try {
+      const keys = Object.keys(localStorage).filter(k => k.startsWith("rk_sub_"));
+      const subs = keys.map(k => JSON.parse(localStorage.getItem(k))).filter(s => s && s.sprintNumber === sprintNumber);
+      if (subs.length > 0) {
+        return subs.flatMap(sub =>
+          Object.entries(sub.answers)
+            .filter(([, val]) => val)
+            .map(([qId, content]) => ({
+              id: uid(),
+              qId,
+              content,
+              author: sub.name,
+              color: CARD_COLORS[Math.floor(Math.random() * CARD_COLORS.length)],
+              groupId: null,
+              type: qId === "q1" ? "emoji" : "text"
+            }))
+        );
+      }
+    } catch {}
+    return seedCards(sprintNumber);
+  });
   const [revealed, setRevealed] = useState(false);
   const [groups, setGroups] = useState({});
   const [actionItems, setActionItems] = useState([
@@ -1147,7 +1194,7 @@ function BoardView({ sprintNumber, members, questions, currentUser, currentVibe 
             <span className="presence-name">{p.name}{p.vibe ? ` ${p.vibe}` : ""}</span>
           </div>
         ))}
-        <span style={{ marginLeft: "auto", color: "#bbb", fontSize: 11 }}>Demo — 4 participants</span>
+
       </div>
 
       {/* Reaction bar */}
