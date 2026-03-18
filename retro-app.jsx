@@ -25,7 +25,7 @@ function uid() { return Math.random().toString(36).slice(2, 9); }
 
 // ── Session Store ─────────────────────────────────────────────────────────────
 
-const SESSION_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
+const SESSION_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
 const sessionStore = {
   list() {
@@ -66,19 +66,11 @@ const sessionStore = {
   }
 };
 
-// Default session for first-time use
 function getOrCreateDefaultSession() {
   const sessions = sessionStore.list();
   if (sessions.length > 0) return sessions[sessions.length - 1];
   const id = uid() + uid();
-  const session = {
-    id,
-    name: "My Team Retro",
-    sprintNumber: 13,
-    date: "",
-    q3Variant: 0,
-    createdAt: Date.now(),
-  };
+  const session = { id, name: "My Team Retro", sprintNumber: 13, date: "", q3Variant: 0, createdAt: Date.now() };
   sessionStore.save(session);
   return session;
 }
@@ -252,9 +244,14 @@ const css = `
   .text-input { width: 100%; border: 1.5px solid var(--border); border-radius: 6px; padding: 12px 14px; font-family: 'DM Sans', sans-serif; font-size: 15px; resize: vertical; min-height: 80px; transition: border .2s; outline: none; background: var(--bg-input); color: var(--text); }
   .text-input:focus { border-color: var(--or-red); box-shadow: 0 0 0 3px var(--or-red-glow); }
 
-  .submit-btn { width: 100%; padding: 15px; background: var(--or-red); color: white; border: none; border-radius: 6px; font-family: 'Libre Franklin', sans-serif; font-size: 17px; font-weight: 800; cursor: pointer; transition: all .2s; margin-top: 12px; }
+  .submit-btn { width: 100%; padding: 15px; background: var(--or-red); color: white; border: none; border-radius: 6px; font-family: 'Libre Franklin', sans-serif; font-size: 17px; font-weight: 800; cursor: pointer; transition: all .2s; margin-top: 0; }
   .submit-btn:hover { background: var(--or-red-dark); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(211,0,45,.3); }
   .submit-btn:disabled { opacity: .4; cursor: not-allowed; transform: none; box-shadow: none; }
+
+  .exit-btn { padding: 15px 20px; background: transparent; color: var(--text-muted); border: 1.5px solid var(--border-light); border-radius: 6px; font-family: 'DM Sans', sans-serif; font-size: 15px; font-weight: 600; cursor: pointer; transition: all .2s; white-space: nowrap; }
+  .exit-btn:hover { border-color: var(--or-red); color: var(--text); }
+
+  .submit-actions { display: flex; gap: 10px; margin-top: 12px; }
 
   .success-wrap { text-align: center; padding: 80px 24px; }
   .success-icon { font-size: 64px; margin-bottom: 20px; }
@@ -321,21 +318,12 @@ const css = `
 
   .revealed-banner { background: rgba(16,185,129,.2); color: #10b981; text-align: center; padding: 8px; font-weight: 700; font-size: 13px; border-radius: 8px; margin-bottom: 8px; }
 
-  /* ACTION ITEMS — sidebar panel */
-  .actions-panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 20px; width: 300px; flex-shrink: 0; }
-  .actions-title { font-family: 'Libre Franklin', sans-serif; font-size: 16px; font-weight: 800; color: var(--text); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
-  .action-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
-  .action-item:last-child { border-bottom: none; }
+  /* ACTION ITEMS col */
   .action-check { width: 20px; height: 20px; border-radius: 50%; border: 2px solid #555; cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: all .2s; }
   .action-check.done { background: #6BCB77; border-color: #6BCB77; color: white; font-size: 11px; }
   .action-text { flex: 1; font-size: 13px; color: var(--text); min-width: 0; }
   .action-text.done { text-decoration: line-through; color: var(--text-dim); }
   .action-owner { font-size: 11px; color: var(--blue); font-weight: 600; background: rgba(77,150,255,.12); padding: 2px 6px; border-radius: 8px; white-space: nowrap; flex-shrink: 0; }
-  .action-delete { color: var(--text-dim); cursor: pointer; font-size: 16px; flex-shrink: 0; }
-  .action-delete:hover { color: #FF6B6B; }
-  .add-action { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
-  .add-action input { flex: 1; min-width: 0; border: 1.5px solid var(--border); border-radius: 8px; padding: 7px 10px; font-family: 'DM Sans', sans-serif; font-size: 13px; outline: none; background: var(--bg-input); color: var(--text); }
-  .add-action input:focus { border-color: var(--or-red); }
   .add-action-btn { padding: 7px 12px; background: var(--or-red); color: white; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 16px; flex-shrink: 0; }
 
   /* HISTORY */
@@ -479,39 +467,29 @@ const css = `
   .presence-name { font-weight: 600; }
 
   .tag { display: inline-block; border-radius: 20px; padding: 2px 10px; font-size: 11px; font-weight: 700; }
-
   .ai-suggestion { background: linear-gradient(135deg, rgba(102,126,234,.1), rgba(118,75,162,.1)); border: 1px solid #667eea40; border-radius: 10px; padding: 12px; margin-top: 8px; }
   .ai-suggestion-title { font-size: 11px; font-weight: 700; color: #764ba2; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
   .suggestion-item { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); cursor: pointer; border-radius: 6px; padding: 6px 8px; transition: background .15s; }
   .suggestion-item:hover { background: rgba(102,126,234,.1); }
   .suggestion-apply { font-size: 11px; color: #667eea; font-weight: 600; margin-left: auto; }
 
-  /* CLOSED / EXPIRED */
   .closed-wrap { text-align: center; padding: 80px 24px; }
   .closed-wrap h2 { font-family: 'Libre Franklin', sans-serif; font-size: 26px; font-weight: 800; color: var(--text); margin-top: 16px; }
   .closed-wrap p { color: var(--text-muted); margin-top: 8px; font-size: 15px; }
 `;
 
-// ── Components ────────────────────────────────────────────────────────────────
+// ── GIF / Q1 Components ───────────────────────────────────────────────────────
 
 async function searchGifs(query) {
   try {
-    const res = await fetch(
-      `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(query)}&key=AIzaSyAyimkuYQYF_FXVALexPuGQctUWRURdCDY&limit=12&media_filter=gif`
-    );
+    const res = await fetch(`https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(query)}&key=AIzaSyAyimkuYQYF_FXVALexPuGQctUWRURdCDY&limit=12&media_filter=gif`);
     const data = await res.json();
     if (data.results && data.results.length > 0) {
-      return data.results.map(r => ({
-        id: r.id,
-        title: r.content_description || query,
-        images: { fixed_height_small: { url: r.media_formats?.tinygif?.url || r.media_formats?.gif?.url } }
-      }));
+      return data.results.map(r => ({ id: r.id, title: r.content_description || query, images: { fixed_height_small: { url: r.media_formats?.tinygif?.url || r.media_formats?.gif?.url } } }));
     }
   } catch {}
   try {
-    const res = await fetch(
-      `https://api.giphy.com/v1/gifs/search?api_key=Lat2X82BQoZI8UZnG0cHU2QnlITbWYr3&q=${encodeURIComponent(query)}&limit=12&rating=g`
-    );
+    const res = await fetch(`https://api.giphy.com/v1/gifs/search?api_key=Lat2X82BQoZI8UZnG0cHU2QnlITbWYr3&q=${encodeURIComponent(query)}&limit=12&rating=g`);
     const data = await res.json();
     return data.data || [];
   } catch {}
@@ -556,11 +534,8 @@ function GifPicker({ value, onChange }) {
   return (
     <div className="gif-picker">
       <div className="gif-search-row">
-        <input className="gif-search-input" placeholder="Search GIFs…" value={query}
-          onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && search()} />
-        <button className="gif-search-btn" onClick={search} disabled={loading || !query.trim()}>
-          {loading ? "…" : "Search"}
-        </button>
+        <input className="gif-search-input" placeholder="Search GIFs…" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && search()} />
+        <button className="gif-search-btn" onClick={search} disabled={loading || !query.trim()}>{loading ? "…" : "Search"}</button>
       </div>
       {loading && <div className="gif-loading">🔍 Searching…</div>}
       {!loading && searched && results.length === 0 && <div className="gif-empty">No GIFs found.</div>}
@@ -600,9 +575,7 @@ function Q1Picker({ value, onChange }) {
       </div>
       {mode === "emoji" ? (
         <div className="emoji-grid">
-          {EMOJIS.map(e => (
-            <button key={e} className={`emoji-btn ${value === e ? "selected" : ""}`} onClick={() => onChange(e)}>{e}</button>
-          ))}
+          {EMOJIS.map(e => <button key={e} className={`emoji-btn ${value === e ? "selected" : ""}`} onClick={() => onChange(e)}>{e}</button>)}
         </div>
       ) : (
         <GifPicker value={isGif ? value : null} onChange={onChange} />
@@ -610,6 +583,8 @@ function Q1Picker({ value, onChange }) {
     </div>
   );
 }
+
+// ── StickyCard ────────────────────────────────────────────────────────────────
 
 function StickyCard({ card, hidden, onGroup, grouped, groupName, revealed, currentUser, onVote }) {
   const isGif = card.content && typeof card.content === "object" && card.content.url;
@@ -622,7 +597,6 @@ function StickyCard({ card, hidden, onGroup, grouped, groupName, revealed, curre
   const handleVote = (e, dir) => {
     e.stopPropagation();
     if (!revealed) return;
-    // Toggle off if same vote, otherwise set new direction
     onVote(card.id, myVote === dir ? 0 : dir);
   };
 
@@ -646,39 +620,12 @@ function StickyCard({ card, hidden, onGroup, grouped, groupName, revealed, curre
         </div>
       )}
       {!hidden && <div className="sticky-author">— {card.author}</div>}
-
-      {/* Vote bar — only after reveal */}
       {revealed && (
-        <div
-          style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, paddingTop: 6, borderTop: "1px solid rgba(0,0,0,.1)" }}
-          onClick={e => e.stopPropagation()}
-        >
-          <button
-            onClick={e => handleVote(e, 1)}
-            style={{
-              display: "flex", alignItems: "center", gap: 3,
-              background: myVote === 1 ? "#ff4500" : "rgba(0,0,0,.1)",
-              border: "none", borderRadius: 4, padding: "2px 7px",
-              cursor: "pointer", fontSize: 12, fontWeight: 700,
-              color: myVote === 1 ? "white" : "rgba(0,0,0,.55)",
-              transition: "all .15s",
-            }}
-            title="Upvote"
-          >
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, paddingTop: 6, borderTop: "1px solid rgba(0,0,0,.1)" }} onClick={e => e.stopPropagation()}>
+          <button onClick={e => handleVote(e, 1)} style={{ display: "flex", alignItems: "center", gap: 3, background: myVote === 1 ? "#ff4500" : "rgba(0,0,0,.1)", border: "none", borderRadius: 4, padding: "2px 7px", cursor: "pointer", fontSize: 12, fontWeight: 700, color: myVote === 1 ? "white" : "rgba(0,0,0,.55)", transition: "all .15s" }} title="Upvote">
             ▲ {upCount > 0 ? upCount : ""}
           </button>
-          <button
-            onClick={e => handleVote(e, -1)}
-            style={{
-              display: "flex", alignItems: "center", gap: 3,
-              background: myVote === -1 ? "#7193ff" : "rgba(0,0,0,.1)",
-              border: "none", borderRadius: 4, padding: "2px 7px",
-              cursor: "pointer", fontSize: 12, fontWeight: 700,
-              color: myVote === -1 ? "white" : "rgba(0,0,0,.55)",
-              transition: "all .15s",
-            }}
-            title="Downvote"
-          >
+          <button onClick={e => handleVote(e, -1)} style={{ display: "flex", alignItems: "center", gap: 3, background: myVote === -1 ? "#7193ff" : "rgba(0,0,0,.1)", border: "none", borderRadius: 4, padding: "2px 7px", cursor: "pointer", fontSize: 12, fontWeight: 700, color: myVote === -1 ? "white" : "rgba(0,0,0,.55)", transition: "all .15s" }} title="Downvote">
             ▼ {downCount > 0 ? downCount : ""}
           </button>
           {netScore !== 0 && (
@@ -696,36 +643,12 @@ function StickyCard({ card, hidden, onGroup, grouped, groupName, revealed, curre
 
 async function fetchIdeas(question) {
   const starters = {
-    achievements: [
-      "We finally shipped the feature that's been in progress for weeks — solid execution from the whole team.",
-      "Collaboration was strong this sprint, but we need to be more realistic about what we can actually finish.",
-      "The technical debt we paid down this sprint will save us significant time next quarter."
-    ],
-    start: [
-      "Start doing async design reviews before sprint planning so we catch issues earlier.",
-      "We should start time-boxing exploratory tasks — they tend to sprawl without a hard limit.",
-      "Start sharing blockers in the standup channel same-day instead of waiting for the next sync."
-    ],
-    stop: [
-      "Stop pulling in stretch tickets without checking team capacity first.",
-      "Stop context-switching mid-sprint — it's killing our focus time.",
-      "Stop leaving PRs open for more than 24 hours without a reviewer assigned."
-    ],
-    continue: [
-      "Keep the daily standup short and focused — it's one of the few rituals that actually works.",
-      "The pairing sessions this sprint were really effective, let's keep that going.",
-      "Continue the async-first communication approach — it's reduced interruptions noticeably."
-    ],
-    shoutout: [
-      "Shoutout to the folks who stayed focused even when things got chaotic mid-sprint.",
-      "Big thanks to whoever documented that gnarly bug fix — future us will appreciate it.",
-      "Recognition to the team for being proactive about unblocking each other this sprint."
-    ],
-    default: [
-      "This sprint felt more focused than usual — the prep work beforehand really paid off.",
-      "We need to get better at flagging risks earlier rather than discovering them at the end.",
-      "One thing worth trying: a quick team check-in at the midpoint of each sprint."
-    ]
+    achievements: ["We finally shipped the feature that's been in progress for weeks — solid execution from the whole team.", "Collaboration was strong this sprint, but we need to be more realistic about what we can actually finish.", "The technical debt we paid down this sprint will save us significant time next quarter."],
+    start: ["Start doing async design reviews before sprint planning so we catch issues earlier.", "We should start time-boxing exploratory tasks — they tend to sprawl without a hard limit.", "Start sharing blockers in the standup channel same-day instead of waiting for the next sync."],
+    stop: ["Stop pulling in stretch tickets without checking team capacity first.", "Stop context-switching mid-sprint — it's killing our focus time.", "Stop leaving PRs open for more than 24 hours without a reviewer assigned."],
+    continue: ["Keep the daily standup short and focused — it's one of the few rituals that actually works.", "The pairing sessions this sprint were really effective, let's keep that going.", "Continue the async-first communication approach — it's reduced interruptions noticeably."],
+    shoutout: ["Shoutout to the folks who stayed focused even when things got chaotic mid-sprint.", "Big thanks to whoever documented that gnarly bug fix — future us will appreciate it.", "Recognition to the team for being proactive about unblocking each other this sprint."],
+    default: ["This sprint felt more focused than usual — the prep work beforehand really paid off.", "We need to get better at flagging risks earlier rather than discovering them at the end.", "One thing worth trying: a quick team check-in at the midpoint of each sprint."]
   };
   const q = question.toLowerCase();
   let bank = starters.default;
@@ -741,33 +664,23 @@ function AIIdeas({ question, onSelect }) {
   const [ideas, setIdeas] = useState([]);
   const [loading, setLoading] = useState(false);
   const [shown, setShown] = useState(false);
-
-  const generate = async () => {
-    setLoading(true); setShown(true);
-    try { setIdeas(await fetchIdeas(question)); } catch { setIdeas([]); }
-    setLoading(false);
-  };
-
+  const generate = async () => { setLoading(true); setShown(true); try { setIdeas(await fetchIdeas(question)); } catch { setIdeas([]); } setLoading(false); };
   if (!shown) return <button className="ai-ideas-btn" onClick={generate}>✨ Give me ideas</button>;
-
   return (
     <div style={{ marginBottom: 12 }}>
-      <button className="ai-ideas-btn" onClick={() => { setIdeas([]); generate(); }} disabled={loading}>
-        ✨ {loading ? "Generating…" : "Refresh ideas"}
-      </button>
-      {loading ? (
-        <div className="ai-ideas-wrap"><div className="ai-ideas-loading"><div className="ai-dot-spin" />Thinking…</div></div>
-      ) : ideas.length > 0 ? (
-        <div className="ai-ideas-wrap">
-          <div className="ai-ideas-header">✨ Starter ideas — click to use</div>
-          {ideas.map((idea, i) => (
-            <button key={i} className="ai-idea-chip" onClick={() => onSelect(idea)}>
-              <span className="ai-idea-chip-text">{idea}</span>
-              <span className="ai-idea-use">Use this →</span>
-            </button>
-          ))}
-        </div>
-      ) : null}
+      <button className="ai-ideas-btn" onClick={() => { setIdeas([]); generate(); }} disabled={loading}>✨ {loading ? "Generating…" : "Refresh ideas"}</button>
+      {loading ? <div className="ai-ideas-wrap"><div className="ai-ideas-loading"><div className="ai-dot-spin" />Thinking…</div></div>
+        : ideas.length > 0 ? (
+          <div className="ai-ideas-wrap">
+            <div className="ai-ideas-header">✨ Starter ideas — click to use</div>
+            {ideas.map((idea, i) => (
+              <button key={i} className="ai-idea-chip" onClick={() => onSelect(idea)}>
+                <span className="ai-idea-chip-text">{idea}</span>
+                <span className="ai-idea-use">Use this →</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
     </div>
   );
 }
@@ -780,20 +693,11 @@ const submissionsStore = {
 };
 
 function generateEditToken() { return uid() + uid(); }
-function isSubmissionOpen() { return true; }
 
 function CopyButton({ text, label = "Copy Link" }) {
   const [copied, setCopied] = useState(false);
-  const copy = () => {
-    navigator.clipboard.writeText(text).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-  return (
-    <button className={`copy-btn ${copied ? "copied" : ""}`} onClick={copy}>
-      {copied ? "✓ Copied!" : label}
-    </button>
-  );
+  const copy = () => { navigator.clipboard.writeText(text).catch(() => {}); setCopied(true); setTimeout(() => setCopied(false), 2000); };
+  return <button className={`copy-btn ${copied ? "copied" : ""}`} onClick={copy}>{copied ? "✓ Copied!" : label}</button>;
 }
 
 function ConfirmModal({ answers, questions, onConfirm, onCancel }) {
@@ -828,7 +732,7 @@ function ConfirmModal({ answers, questions, onConfirm, onCancel }) {
   );
 }
 
-function EditLinkBox({ token, sprintNumber }) {
+function EditLinkBox({ token }) {
   const base = window.location.origin + window.location.pathname.replace(/\?.*$/, "");
   const sessionParam = new URLSearchParams(window.location.search).get("session");
   const editUrl = `${base}?${sessionParam ? "session=" + sessionParam + "&" : ""}edit=${token}`;
@@ -846,12 +750,7 @@ function EditLinkBox({ token, sprintNumber }) {
 
 // ── Rich Text Editor ──────────────────────────────────────────────────────────
 
-const ALL_EMOJIS = [
-  "😀","😂","🥲","😍","🤩","😎","🤔","😬","😅","🙌","👏","🔥","💯","🚀","⚡","🎯",
-  "💪","🧠","💡","✅","❌","⚠️","📌","🔧","🐛","🎉","🏆","🌱","🌊","💥","🤝","👀",
-  "😤","😮","🥳","🫠","😵","🤯","💀","🙏","👋","✊","🫡","🎸","🌀","⏰","📊","🗓️",
-  "💬","📝","🔗","🔑","🚧","🛠️","📦","🧩","🎲","🪄","🫶","❤️","💙","💚","💛","🖤"
-];
+const ALL_EMOJIS = ["😀","😂","🥲","😍","🤩","😎","🤔","😬","😅","🙌","👏","🔥","💯","🚀","⚡","🎯","💪","🧠","💡","✅","❌","⚠️","📌","🔧","🐛","🎉","🏆","🌱","🌊","💥","🤝","👀","😤","😮","🥳","🫠","😵","🤯","💀","🙏","👋","✊","🫡","🎸","🌀","⏰","📊","🗓️","💬","📝","🔗","🔑","🚧","🛠️","📦","🧩","🎲","🪄","🫶","❤️","💙","💚","💛","🖤"];
 
 function EmojiPopup({ onSelect, onClose }) {
   const [search, setSearch] = useState("");
@@ -863,12 +762,9 @@ function EmojiPopup({ onSelect, onClose }) {
   }, [onClose]);
   return (
     <div className="emoji-popup">
-      <input className="emoji-popup-search" placeholder="Search emoji…" value={search}
-        onChange={e => setSearch(e.target.value)} autoFocus />
+      <input className="emoji-popup-search" placeholder="Search emoji…" value={search} onChange={e => setSearch(e.target.value)} autoFocus />
       <div className="emoji-popup-grid">
-        {filtered.map((e, i) => (
-          <div key={i} className="emoji-popup-item" onClick={() => { onSelect(e); onClose(); }}>{e}</div>
-        ))}
+        {filtered.map((e, i) => <div key={i} className="emoji-popup-item" onClick={() => { onSelect(e); onClose(); }}>{e}</div>)}
       </div>
     </div>
   );
@@ -878,7 +774,6 @@ function RichTextEditor({ value, onChange, placeholder, injectText }) {
   const editorRef = useRef(null);
   const [showEmoji, setShowEmoji] = useState(false);
   const [activeFormats, setActiveFormats] = useState({ bold: false, italic: false, list: false });
-  // Track injected text by content only — strip any timestamp suffix before comparing
   const lastInjectedRef = useRef("");
 
   useEffect(() => {
@@ -889,7 +784,6 @@ function RichTextEditor({ value, onChange, placeholder, injectText }) {
 
   useEffect(() => {
     if (!injectText || !editorRef.current) return;
-    // Strip any trailing _<timestamp> artifact before injecting
     const clean = injectText.replace(/_\d+$/, "");
     if (clean === lastInjectedRef.current) return;
     lastInjectedRef.current = clean;
@@ -904,22 +798,10 @@ function RichTextEditor({ value, onChange, placeholder, injectText }) {
     sel.addRange(range);
   }, [injectText]);
 
-  const exec = (cmd) => {
-    editorRef.current.focus();
-    document.execCommand(cmd, false, null);
-    syncFormats(); emitChange();
-  };
-  const syncFormats = () => setActiveFormats({
-    bold: document.queryCommandState("bold"),
-    italic: document.queryCommandState("italic"),
-    list: document.queryCommandState("insertUnorderedList"),
-  });
+  const exec = (cmd) => { editorRef.current.focus(); document.execCommand(cmd, false, null); syncFormats(); emitChange(); };
+  const syncFormats = () => setActiveFormats({ bold: document.queryCommandState("bold"), italic: document.queryCommandState("italic"), list: document.queryCommandState("insertUnorderedList") });
   const emitChange = () => { if (editorRef.current) onChange(editorRef.current.innerHTML); };
-  const insertEmoji = (emoji) => {
-    editorRef.current.focus();
-    document.execCommand("insertText", false, emoji);
-    emitChange();
-  };
+  const insertEmoji = (emoji) => { editorRef.current.focus(); document.execCommand("insertText", false, emoji); emitChange(); };
 
   return (
     <div className="rte-wrap">
@@ -931,25 +813,13 @@ function RichTextEditor({ value, onChange, placeholder, injectText }) {
         <div className="rte-divider" />
         <button className="rte-btn rte-emoji-btn" onMouseDown={e => { e.preventDefault(); setShowEmoji(s => !s); }}>😊</button>
       </div>
-      <div
-        ref={editorRef}
-        className="rte-editor"
-        contentEditable
-        suppressContentEditableWarning
-        data-placeholder={placeholder || "Type your response…"}
-        onInput={emitChange}
-        onKeyUp={syncFormats}
-        onMouseUp={syncFormats}
+      <div ref={editorRef} className="rte-editor" contentEditable suppressContentEditableWarning data-placeholder={placeholder || "Type your response…"} onInput={emitChange} onKeyUp={syncFormats} onMouseUp={syncFormats}
         onKeyDown={e => {
           if ((e.metaKey || e.ctrlKey) && e.key === "b") { e.preventDefault(); exec("bold"); }
           if ((e.metaKey || e.ctrlKey) && e.key === "i") { e.preventDefault(); exec("italic"); }
         }}
       />
-      {showEmoji && (
-        <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 300 }}>
-          <EmojiPopup onSelect={insertEmoji} onClose={() => setShowEmoji(false)} />
-        </div>
-      )}
+      {showEmoji && <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 300 }}><EmojiPopup onSelect={insertEmoji} onClose={() => setShowEmoji(false)} /></div>}
     </div>
   );
 }
@@ -962,31 +832,35 @@ function SubmitView({ session, questions, currentUser, cutoff, joinQ1 }) {
   const existingSubmission = editToken ? submissionsStore.get(editToken) : null;
 
   const [name, setName] = useState(existingSubmission?.name || currentUser || "");
-  const [answers, setAnswers] = useState(
-    existingSubmission?.answers || { q1: joinQ1 || "", q2: "", q3: "", q4: "" }
-  );
+  const [answers, setAnswers] = useState(existingSubmission?.answers || { q1: joinQ1 || "", q2: "", q3: "", q4: "" });
   const [injected, setInjected] = useState({ q1: "", q2: "", q3: "", q4: "" });
   const [showConfirm, setShowConfirm] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [editLink, setEditLink] = useState(existingSubmission ? { token: editToken } : null);
+  const [exited, setExited] = useState(false);
   const isEditing = !!existingSubmission;
 
-  const setAnswer = (id, val) => setAnswers(a => ({ ...a, [id]: val }));
-
-  const injectIdea = (qId, text) => {
-    setAnswer(qId, text);
-    // Pass clean text — no timestamp needed since RichTextEditor now dedupes by content
-    setInjected(i => ({ ...i, [qId]: text }));
+  const handleExit = () => {
+    try { window.history.replaceState({}, "", window.location.href.split("?")[0]); } catch {}
+    setExited(true);
   };
+
+  if (exited) return (
+    <div className="submit-wrap">
+      <div className="success-wrap">
+        <div className="success-icon">👋</div>
+        <h2>No changes made</h2>
+        <p>Your original responses are still saved.</p>
+      </div>
+    </div>
+  );
+
+  const setAnswer = (id, val) => setAnswers(a => ({ ...a, [id]: val }));
+  const injectIdea = (qId, text) => { setAnswer(qId, text); setInjected(i => ({ ...i, [qId]: text })); };
 
   const handleSubmit = () => {
     const token = editToken || generateEditToken();
-    submissionsStore.set(token, {
-      name: name.trim(), answers,
-      sprintNumber: session.sprintNumber,
-      sessionId: session.id,
-      submittedAt: new Date().toISOString()
-    });
+    submissionsStore.set(token, { name: name.trim(), answers, sprintNumber: session.sprintNumber, sessionId: session.id, submittedAt: new Date().toISOString() });
     setEditLink({ token });
     setSubmitted(true);
     setShowConfirm(false);
@@ -998,17 +872,14 @@ function SubmitView({ session, questions, currentUser, cutoff, joinQ1 }) {
         <div className="success-icon">{isEditing ? "✏️" : "🎉"}</div>
         <h2>{isEditing ? "Responses updated!" : "You're all set!"}</h2>
         <p>Your responses have been saved. See you at the retro!</p>
-        {editLink && <EditLinkBox token={editLink.token} sprintNumber={session.sprintNumber} />}
+        {editLink && <EditLinkBox token={editLink.token} />}
       </div>
     </div>
   );
 
   return (
     <div className="submit-wrap">
-      {showConfirm && (
-        <ConfirmModal answers={answers} questions={questions}
-          onConfirm={handleSubmit} onCancel={() => setShowConfirm(false)} />
-      )}
+      {showConfirm && <ConfirmModal answers={answers} questions={questions} onConfirm={handleSubmit} onCancel={() => setShowConfirm(false)} />}
       <div className="submit-header">
         <h1>{session.name} · Sprint {session.sprintNumber}</h1>
         <p>Share your thoughts before the meeting.</p>
@@ -1017,8 +888,7 @@ function SubmitView({ session, questions, currentUser, cutoff, joinQ1 }) {
       <div className="name-card">
         <div className="name-card-label">Your name</div>
         <div className="name-card-title">Who's submitting?</div>
-        <input className="name-input" placeholder="First name or display name…"
-          value={name} onChange={e => setName(e.target.value)} maxLength={30} />
+        <input className="name-input" placeholder="First name or display name…" value={name} onChange={e => setName(e.target.value)} maxLength={30} />
       </div>
       {isEditing && (
         <div className="editing-banner">
@@ -1034,54 +904,35 @@ function SubmitView({ session, questions, currentUser, cutoff, joinQ1 }) {
           ) : (
             <>
               <AIIdeas question={q.prompt} onSelect={idea => injectIdea(q.id, idea)} />
-              <RichTextEditor
-                value={answers[q.id]}
-                onChange={v => setAnswer(q.id, v)}
-                placeholder="Type your response, or pick a starter above…"
-                injectText={injected[q.id]}
-              />
+              <RichTextEditor value={answers[q.id]} onChange={v => setAnswer(q.id, v)} placeholder="Type your response, or pick a starter above…" injectText={injected[q.id]} />
             </>
           )}
         </div>
       ))}
-      <button className="submit-btn" disabled={!name.trim()} onClick={() => setShowConfirm(true)}>
-        {isEditing ? "Update My Responses →" : "Review & Submit →"}
-      </button>
+      <div className="submit-actions">
+        {isEditing && (
+          <button className="exit-btn" onClick={handleExit}>← Exit without saving</button>
+        )}
+        <button className="submit-btn" style={{ flex: 1 }} disabled={!name.trim()} onClick={() => setShowConfirm(true)}>
+          {isEditing ? "Update My Responses →" : "Review & Submit →"}
+        </button>
+      </div>
     </div>
   );
 }
-// ── Export ───────────────────────────────────────────────────────────────────
+
+// ── Export ────────────────────────────────────────────────────────────────────
 
 function exportCSV({ session, questions, cards, freeCards, actionItems }) {
   const escape = (val) => {
     const s = typeof val === "object" && val?.url ? `[GIF: ${val.title || "gif"}]` : String(val ?? "");
     return `"${s.replace(/"/g, '""')}"`;
   };
-
-  const netVotes = (card) => {
-    const v = card.votes || {};
-    return Object.values(v).reduce((sum, x) => sum + x, 0);
-  };
-
+  const netVotes = (card) => Object.values(card.votes || {}).reduce((sum, x) => sum + x, 0);
   const rows = [["Section", "Question", "Author", "Content", "Net Votes"]];
-
-  // Sticky cards grouped by question
-  questions.forEach(q => {
-    cards.filter(c => c.qId === q.id).forEach(c => {
-      rows.push([q.label, q.prompt, c.author, c.content, netVotes(c)]);
-    });
-  });
-
-  // Free cards
-  freeCards.forEach(c => {
-    rows.push(["Free Card", "", c.author, c.content, netVotes(c)]);
-  });
-
-  // Action items
-  actionItems.forEach(item => {
-    rows.push(["Action Item", "", item.owner, item.text, item.done ? "Done" : "Open"]);
-  });
-
+  questions.forEach(q => { cards.filter(c => c.qId === q.id).forEach(c => { rows.push([q.label, q.prompt, c.author, c.content, netVotes(c)]); }); });
+  freeCards.forEach(c => { rows.push(["Free Card", "", c.author, c.content, netVotes(c)]); });
+  actionItems.forEach(item => { rows.push(["Action Item", "", item.owner, item.text, item.done ? "Done" : "Open"]); });
   const csv = rows.map(r => r.map(escape).join(",")).join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
@@ -1090,6 +941,7 @@ function exportCSV({ session, questions, cards, freeCards, actionItems }) {
   a.href = url; a.download = name; a.click();
   URL.revokeObjectURL(url);
 }
+
 // ── Board View ────────────────────────────────────────────────────────────────
 
 const AI_SUGGESTIONS = {
@@ -1114,31 +966,18 @@ function FreeCard({ card, onDragStart, onEdit }) {
 
   return (
     <div
-      style={{
-        position: "absolute", left: card.x, top: card.y, width: 200,
-        background: card.color, borderRadius: 10, padding: "12px 14px",
-        boxShadow: "2px 3px 0 rgba(0,0,0,.18)", cursor: editing ? "text" : "grab",
-        userSelect: "none", zIndex: editing ? 50 : 10,
-        border: editing ? "2px solid #333" : "2px solid transparent",
-      }}
+      style={{ position: "absolute", left: card.x, top: card.y, width: 200, background: card.color, borderRadius: 10, padding: "12px 14px", boxShadow: "2px 3px 0 rgba(0,0,0,.18)", cursor: editing ? "text" : "grab", userSelect: "none", zIndex: editing ? 50 : 10, border: editing ? "2px solid #333" : "2px solid transparent" }}
       onMouseDown={e => { if (editing) return; e.preventDefault(); onDragStart(e, card.id); }}
       onDoubleClick={handleDoubleClick}
     >
       {editing ? (
         <div style={{ position: "relative" }}>
-          <textarea
-            ref={editorRef} value={text} onChange={e => setText(e.target.value)}
-            onBlur={handleBlur}
+          <textarea ref={editorRef} value={text} onChange={e => setText(e.target.value)} onBlur={handleBlur}
             onKeyDown={e => { if (e.key === "Escape") { setEditing(false); onEdit(card.id, text); } }}
             style={{ width: "100%", minHeight: 60, border: "none", background: "transparent", fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#1a1a1a", resize: "none", outline: "none", lineHeight: 1.5 }}
           />
-          <button onMouseDown={e => { e.preventDefault(); setShowEmoji(s => !s); }}
-            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, padding: "2px 4px", opacity: 0.7 }}>😊</button>
-          {showEmoji && (
-            <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 400 }}>
-              <EmojiPopup onSelect={insertEmoji} onClose={() => setShowEmoji(false)} />
-            </div>
-          )}
+          <button onMouseDown={e => { e.preventDefault(); setShowEmoji(s => !s); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, padding: "2px 4px", opacity: 0.7 }}>😊</button>
+          {showEmoji && <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 400 }}><EmojiPopup onSelect={insertEmoji} onClose={() => setShowEmoji(false)} /></div>}
         </div>
       ) : (
         <div style={{ fontSize: 13, color: "#1a1a1a", lineHeight: 1.5, fontWeight: 500, minHeight: 24, wordBreak: "break-word" }}>
@@ -1159,9 +998,7 @@ function BoardView({ session, members, questions, currentUser }) {
   const [cards, setCards] = useState(() => {
     try {
       const keys = Object.keys(localStorage).filter(k => k.startsWith("rk_sub_"));
-      const subs = keys
-        .map(k => JSON.parse(localStorage.getItem(k)))
-        .filter(s => s && (s.sessionId === sessionId || s.sprintNumber === session?.sprintNumber));
+      const subs = keys.map(k => JSON.parse(localStorage.getItem(k))).filter(s => s && (s.sessionId === sessionId || s.sprintNumber === session?.sprintNumber));
       if (subs.length > 0) {
         return subs.flatMap(sub =>
           Object.entries(sub.answers).filter(([, val]) => val).map(([qId, content]) => ({
@@ -1178,6 +1015,25 @@ function BoardView({ session, members, questions, currentUser }) {
   const [freeCards, setFreeCards] = useState(() => {
     try { return JSON.parse(localStorage.getItem(`rk_free_${sessionId}`) || "[]"); } catch { return []; }
   });
+
+  const [votes, setVotes] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(`rk_votes_${sessionId}`) || "{}"); } catch { return {}; }
+  });
+
+  const saveVotes = (v) => { try { localStorage.setItem(`rk_votes_${sessionId}`, JSON.stringify(v)); } catch {} };
+
+  const handleVote = (cardId, dir) => {
+    setVotes(prev => {
+      const next = { ...prev };
+      if (!next[cardId]) next[cardId] = {};
+      if (dir === 0) { delete next[cardId][currentUser]; }
+      else { next[cardId][currentUser] = dir; }
+      saveVotes(next);
+      return next;
+    });
+  };
+
+  const cardsWithVotes = cards.map(c => ({ ...c, votes: votes[c.id] || {} }));
 
   const [revealed, setRevealed] = useState(false);
   const [groups, setGroups] = useState({});
@@ -1196,14 +1052,9 @@ function BoardView({ session, members, questions, currentUser }) {
   const dragState = useRef(null);
 
   const teamMembers = members?.length ? members : ["Alex", "Sam", "Jordan", "Riley"];
-  const presence = teamMembers.filter(Boolean).map((m, i) => ({
-    name: typeof m === "object" ? m.name : m,
-    color: AVATAR_COLORS[i % AVATAR_COLORS.length]
-  }));
+  const presence = teamMembers.filter(Boolean).map((m, i) => ({ name: typeof m === "object" ? m.name : m, color: AVATAR_COLORS[i % AVATAR_COLORS.length] }));
 
-  const saveFreeCards = (cards) => {
-    try { localStorage.setItem(`rk_free_${sessionId}`, JSON.stringify(cards)); } catch {}
-  };
+  const saveFreeCards = (c) => { try { localStorage.setItem(`rk_free_${sessionId}`, JSON.stringify(c)); } catch {} };
 
   const addFreeCard = () => {
     const canvas = canvasRef.current;
@@ -1222,13 +1073,11 @@ function BoardView({ session, members, questions, currentUser }) {
     window.addEventListener("mousemove", handleDragMove);
     window.addEventListener("mouseup", handleDragEnd);
   };
-
   const handleDragMove = (e) => {
     const d = dragState.current; if (!d) return;
     const dx = e.clientX - d.startX, dy = e.clientY - d.startY;
     setFreeCards(cs => cs.map(c => c.id === d.cardId ? { ...c, x: Math.max(0, d.origX + dx), y: Math.max(0, d.origY + dy) } : c));
   };
-
   const handleDragEnd = () => {
     if (!dragState.current) return;
     setFreeCards(cs => { saveFreeCards(cs); return cs; });
@@ -1236,7 +1085,6 @@ function BoardView({ session, members, questions, currentUser }) {
     window.removeEventListener("mousemove", handleDragMove);
     window.removeEventListener("mouseup", handleDragEnd);
   };
-
   const handleEditCard = (cardId, newText) => {
     setFreeCards(cs => { const updated = cs.map(c => c.id === cardId ? { ...c, content: newText } : c); saveFreeCards(updated); return updated; });
   };
@@ -1254,7 +1102,7 @@ function BoardView({ session, members, questions, currentUser }) {
     setTimeout(() => setReactions(r => r.filter(rx => rx.id !== id)), 2400);
   };
 
-  const cardsForQ = (qId) => cards.filter(c => c.qId === qId);
+  const cardsForQ = (qId) => cardsWithVotes.filter(c => c.qId === qId);
   const applyGroup = (cardId, groupId) => setCards(cs => cs.map(c => c.id === cardId ? { ...c, groupId } : c));
   const createGroup = (qId, name) => { const gid = uid(); setGroups(g => ({ ...g, [gid]: { name, qId } })); return gid; };
   const groupsForQ = (qId) => Object.entries(groups).filter(([, v]) => v.qId === qId);
@@ -1281,15 +1129,11 @@ function BoardView({ session, members, questions, currentUser }) {
       {revealed && (
         <div className="reaction-bar">
           <span className="reaction-bar-label">React</span>
-          {REACTION_EMOJIS.map(e => (
-            <button key={e} className="reaction-emoji-btn" onClick={() => dropReaction(e)}>{e}</button>
-          ))}
+          {REACTION_EMOJIS.map(e => <button key={e} className="reaction-emoji-btn" onClick={() => dropReaction(e)}>{e}</button>)}
         </div>
       )}
 
-      {reactions.map(r => (
-        <div key={r.id} className="reaction-drop" style={{ left: r.x, top: r.y }}>{r.emoji}</div>
-      ))}
+      {reactions.map(r => <div key={r.id} className="reaction-drop" style={{ left: r.x, top: r.y }}>{r.emoji}</div>)}
 
       <div style={{ padding: "16px 24px 24px" }}>
         <div className="board-toolbar">
@@ -1300,6 +1144,7 @@ function BoardView({ session, members, questions, currentUser }) {
             : <button className="tool-btn green" onClick={() => setRevealed(false)}>🙈 Hide Cards</button>
           }
           <button className="tool-btn" onClick={() => setShowAI("q3")}>✨ AI Suggestions</button>
+          <button className="tool-btn" onClick={() => exportCSV({ session, questions, cards: cardsWithVotes, freeCards, actionItems })}>⬇ Export CSV</button>
         </div>
 
         {!revealed && (
@@ -1314,12 +1159,12 @@ function BoardView({ session, members, questions, currentUser }) {
           </div>
         )}
 
-        {/* Main board layout: columns + actions side by side */}
-        <div style={{ display: "flex", gap: 24, alignItems: "flex-start" }}>
-          {/* Left: freeform canvas + columns */}
-          <div style={{ position: "relative", flex: 1, minWidth: 0, overflowX: "auto" }}>
-            {/* Free cards canvas — absolute, sits above columns */}
-            <div ref={canvasRef} style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 20, minHeight: "100%" }}>
+        {/* Board: scrollable row of all columns including actions */}
+        <div style={{ overflowX: "auto", paddingBottom: 24 }}>
+          <div style={{ display: "flex", gap: 20, alignItems: "flex-start", minWidth: "max-content", position: "relative" }}>
+
+            {/* Free cards canvas */}
+            <div ref={canvasRef} style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 20 }}>
               {freeCards.map(card => (
                 <div key={card.id} style={{ pointerEvents: "all" }}>
                   <FreeCard card={card} onDragStart={handleDragStart} onEdit={handleEditCard} />
@@ -1327,66 +1172,72 @@ function BoardView({ session, members, questions, currentUser }) {
               ))}
             </div>
 
-            {/* Columns */}
-            <div className="board-columns" style={{ position: "relative", zIndex: 1 }}>
-              {questions.map(q => {
-                const qCards = cardsForQ(q.id);
-                const ungrouped = qCards.filter(c => !c.groupId);
-                const qGroups = groupsForQ(q.id);
-                return (
-                  <div key={q.id} className="col">
-                    <div className="col-header" style={{ background: q.color }}>
-                      {/* Fixed: plain non-italic header text */}
-                      <div className="col-header-title">{q.prompt}</div>
-                      <div className="col-count">{qCards.length}</div>
-                    </div>
-                    <div className="col-body">
-                      {revealed && <div className="revealed-banner">✓ Revealed</div>}
-                      {qGroups.map(([gid, gdata]) => {
-                        const gCards = qCards.filter(c => c.groupId === gid);
-                        return (
-                          <div key={gid} className="group-block">
-                            <div className="group-label">
-                              <input value={gdata.name} onChange={e => setGroups(g => ({ ...g, [gid]: { ...g[gid], name: e.target.value } }))} />
-                              <span style={{ fontSize: 11, color: "#999" }}>{gCards.length} cards</span>
-                            </div>
-                            {gCards.map(c => (
-                              <StickyCard key={c.id} card={c} hidden={!revealed} grouped groupName={gdata.name} onGroup={() => setGroupingCard(c)} />
-                            ))}
-                          </div>
-                        );
-                      })}
-                      {ungrouped.map(c => (
-                        <StickyCard key={c.id} card={c} hidden={!revealed} onGroup={() => revealed && setGroupingCard(c)} />
-                      ))}
-                      {qCards.length === 0 && (
-                        <div style={{ textAlign: "center", color: "#bbb", fontSize: 13, padding: "20px 0" }}>No responses yet</div>
-                      )}
-                    </div>
+            {/* Q1–Q4 columns */}
+            {questions.map(q => {
+              const qCards = cardsForQ(q.id);
+              const ungrouped = qCards.filter(c => !c.groupId);
+              const qGroups = groupsForQ(q.id);
+              return (
+                <div key={q.id} className="col">
+                  <div className="col-header" style={{ background: q.color }}>
+                    <div className="col-header-title">{q.prompt}</div>
+                    <div className="col-count">{qCards.length}</div>
                   </div>
-                );
-              })}
-            </div>
-          </div>
+                  <div className="col-body">
+                    {revealed && <div className="revealed-banner">✓ Revealed</div>}
+                    {qGroups.map(([gid, gdata]) => {
+                      const gCards = qCards.filter(c => c.groupId === gid);
+                      return (
+                        <div key={gid} className="group-block">
+                          <div className="group-label">
+                            <input value={gdata.name} onChange={e => setGroups(g => ({ ...g, [gid]: { ...g[gid], name: e.target.value } }))} />
+                            <span style={{ fontSize: 11, color: "#999" }}>{gCards.length} cards</span>
+                          </div>
+                          {gCards.map(c => (
+                            <StickyCard key={c.id} card={c} hidden={!revealed} grouped groupName={gdata.name} onGroup={() => setGroupingCard(c)} revealed={revealed} currentUser={currentUser} onVote={handleVote} />
+                          ))}
+                        </div>
+                      );
+                    })}
+                    {ungrouped.map(c => (
+                      <StickyCard key={c.id} card={c} hidden={!revealed} onGroup={() => revealed && setGroupingCard(c)} revealed={revealed} currentUser={currentUser} onVote={handleVote} />
+                    ))}
+                    {qCards.length === 0 && <div style={{ textAlign: "center", color: "#bbb", fontSize: 13, padding: "20px 0" }}>No responses yet</div>}
+                  </div>
+                </div>
+              );
+            })}
 
-          {/* Right: Action Items panel — fixed width, no overlap */}
-          <div className="actions-panel" style={{ position: "sticky", top: 80 }}>
-            <div className="actions-title">✅ Action Items</div>
-            {actionItems.map(item => (
-              <div key={item.id} className="action-item">
-                <div className={`action-check ${item.done ? "done" : ""}`} onClick={() => toggleDone(item.id)}>{item.done && "✓"}</div>
-                <div className={`action-text ${item.done ? "done" : ""}`}>{item.text}</div>
-                <div className="action-owner">{item.owner}</div>
-                <div className="action-delete" onClick={() => deleteAction(item.id)}>×</div>
+            {/* Action Items — last column, distinct dark style */}
+            <div style={{ width: 280, flexShrink: 0 }}>
+              <div style={{ background: "#1e2235", border: "1px solid #333849", borderRadius: "12px 12px 0 0", padding: "14px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ fontFamily: "'Libre Franklin', sans-serif", fontSize: 13, fontWeight: 700, color: "#e8eaf0", lineHeight: 1.3 }}>✅ Action Items</div>
+                <div style={{ background: "rgba(255,255,255,.1)", color: "white", borderRadius: 12, padding: "2px 8px", fontSize: 12, fontWeight: 700 }}>{actionItems.length}</div>
               </div>
-            ))}
-            <div className="add-action">
-              <input placeholder="New action…" value={newAction} onChange={e => setNewAction(e.target.value)} onKeyDown={e => e.key === "Enter" && addAction()} />
-              <input placeholder="Owner" value={newOwner} onChange={e => setNewOwner(e.target.value)}
-                style={{ width: 70, border: "1.5px solid var(--border)", borderRadius: 8, padding: "7px 8px", fontFamily: "DM Sans, sans-serif", fontSize: 13, outline: "none", background: "var(--bg-input)", color: "var(--text)" }}
-                onKeyDown={e => e.key === "Enter" && addAction()} />
-              <button className="add-action-btn" onClick={addAction}>+</button>
+              <div style={{ background: "rgba(255,255,255,.02)", border: "1px solid #333849", borderTop: "none", borderRadius: "0 0 12px 12px", padding: 12, minHeight: 200, display: "flex", flexDirection: "column", gap: 8 }}>
+                {actionItems.map(item => (
+                  <div key={item.id} style={{ background: item.done ? "rgba(16,185,129,.08)" : "var(--bg-raised)", border: `1.5px solid ${item.done ? "rgba(16,185,129,.25)" : "var(--border)"}`, borderRadius: 8, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                      <div className={`action-check ${item.done ? "done" : ""}`} onClick={() => toggleDone(item.id)} style={{ marginTop: 1, flexShrink: 0 }}>{item.done && "✓"}</div>
+                      <div className={`action-text ${item.done ? "done" : ""}`} style={{ flex: 1, fontSize: 13 }}>{item.text}</div>
+                      <div style={{ color: "var(--text-dim)", cursor: "pointer", fontSize: 16, flexShrink: 0 }} onClick={() => deleteAction(item.id)}>×</div>
+                    </div>
+                    <div style={{ paddingLeft: 28 }}><span className="action-owner">{item.owner}</span></div>
+                  </div>
+                ))}
+                {actionItems.length === 0 && <div style={{ textAlign: "center", color: "#bbb", fontSize: 13, padding: "20px 0" }}>No actions yet</div>}
+                <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 6 }}>
+                  <input placeholder="New action item…" value={newAction} onChange={e => setNewAction(e.target.value)} onKeyDown={e => e.key === "Enter" && addAction()}
+                    style={{ width: "100%", border: "1.5px solid var(--border)", borderRadius: 8, padding: "7px 10px", fontFamily: "DM Sans, sans-serif", fontSize: 13, outline: "none", background: "var(--bg-input)", color: "var(--text)" }} />
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <input placeholder="Owner" value={newOwner} onChange={e => setNewOwner(e.target.value)} onKeyDown={e => e.key === "Enter" && addAction()}
+                      style={{ flex: 1, border: "1.5px solid var(--border)", borderRadius: 8, padding: "7px 10px", fontFamily: "DM Sans, sans-serif", fontSize: 13, outline: "none", background: "var(--bg-input)", color: "var(--text)" }} />
+                    <button className="add-action-btn" onClick={addAction}>+</button>
+                  </div>
+                </div>
+              </div>
             </div>
+
           </div>
         </div>
 
@@ -1402,12 +1253,10 @@ function BoardView({ session, members, questions, currentUser }) {
                   {s.cards.map((c, j) => (
                     <div key={j} className="suggestion-item" onClick={() => {
                       const gid = createGroup(showAI, s.label);
-                      cards.filter(card => card.qId === showAI && typeof card.content === "string" && card.content.toLowerCase().includes(c.toLowerCase()))
-                        .forEach(card => applyGroup(card.id, gid));
+                      cards.filter(card => card.qId === showAI && typeof card.content === "string" && card.content.toLowerCase().includes(c.toLowerCase())).forEach(card => applyGroup(card.id, gid));
                       setShowAI(null);
                     }}>
-                      <span>🟡</span><span>Cards mentioning <em>{c}</em></span>
-                      <span className="suggestion-apply">Apply →</span>
+                      <span>🟡</span><span>Cards mentioning <em>{c}</em></span><span className="suggestion-apply">Apply →</span>
                     </div>
                   ))}
                 </div>
@@ -1427,14 +1276,12 @@ function BoardView({ session, members, questions, currentUser }) {
               </div>
               <p>Add to an existing group or create a new one:</p>
               {groupsForQ(groupingCard.qId).map(([gid, gdata]) => (
-                <div key={gid} className="suggestion-item" style={{ border: "1px solid var(--border)", borderRadius: 8, marginBottom: 6 }}
-                  onClick={() => { applyGroup(groupingCard.id, gid); setGroupingCard(null); }}>
+                <div key={gid} className="suggestion-item" style={{ border: "1px solid var(--border)", borderRadius: 8, marginBottom: 6 }} onClick={() => { applyGroup(groupingCard.id, gid); setGroupingCard(null); }}>
                   📁 {gdata.name} <span className="suggestion-apply">Add here →</span>
                 </div>
               ))}
               <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                <input className="text-input" style={{ minHeight: "unset", height: 40 }} placeholder="New group name…"
-                  value={newGroupName} onChange={e => setNewGroupName(e.target.value)} />
+                <input className="text-input" style={{ minHeight: "unset", height: 40 }} placeholder="New group name…" value={newGroupName} onChange={e => setNewGroupName(e.target.value)} />
                 <button className="tool-btn primary" onClick={() => {
                   if (!newGroupName.trim()) return;
                   const gid = createGroup(groupingCard.qId, newGroupName);
@@ -1443,9 +1290,7 @@ function BoardView({ session, members, questions, currentUser }) {
                 }}>Create</button>
               </div>
               <div className="modal-btns">
-                {groupingCard.groupId && (
-                  <button className="tool-btn danger" onClick={() => { applyGroup(groupingCard.id, null); setGroupingCard(null); }}>Remove from group</button>
-                )}
+                {groupingCard.groupId && <button className="tool-btn danger" onClick={() => { applyGroup(groupingCard.id, null); setGroupingCard(null); }}>Remove from group</button>}
                 <button className="tool-btn" onClick={() => setGroupingCard(null)}>Cancel</button>
               </div>
             </div>
@@ -1463,15 +1308,11 @@ function HistoryView({ onLoadSession }) {
   return (
     <div className="history-wrap">
       <div className="history-title">📚 Sessions</div>
-      {sessions.length === 0 && (
-        <div style={{ color: "var(--text-muted)", fontSize: 15 }}>No sessions yet. Create one in Settings.</div>
-      )}
+      {sessions.length === 0 && <div style={{ color: "var(--text-muted)", fontSize: 15 }}>No sessions yet. Create one in Settings.</div>}
       {sessions.map(s => (
         <div key={s.id} className="history-card" onClick={() => onLoadSession(s)}>
           <div className="history-sprint">{s.name}</div>
-          <div className="history-meta">
-            Sprint {s.sprintNumber}{s.date ? ` · ${new Date(s.date + "T12:00:00").toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "2-digit" })}` : ""}
-          </div>
+          <div className="history-meta">Sprint {s.sprintNumber}{s.date ? ` · ${new Date(s.date + "T12:00:00").toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "2-digit" })}` : ""}</div>
           <div className="history-stats">
             <span className="stat-pill">🔗 {sessionStore.getSessionUrl(s.id).split("?")[1]}</span>
             {sessionStore.isExpired(s) && <span className="stat-pill" style={{ color: "#ff6b6b" }}>⏰ Expired</span>}
@@ -1490,48 +1331,21 @@ function SettingsModal({ currentSession, onSave, onClose }) {
   const [locked, setLocked] = useState(true);
   const [pw, setPw] = useState("");
   const [pwError, setPwError] = useState(false);
-
-  // Session list management
   const [sessions, setSessions] = useState(() => sessionStore.list());
   const [editingId, setEditingId] = useState(currentSession?.id || null);
-  const [form, setForm] = useState(() => {
-    const s = currentSession || {};
-    return { name: s.name || "", sprintNumber: s.sprintNumber || 1, date: s.date || "", q3Variant: s.q3Variant ?? 0 };
-  });
+  const [form, setForm] = useState(() => { const s = currentSession || {}; return { name: s.name || "", sprintNumber: s.sprintNumber || 1, date: s.date || "", q3Variant: s.q3Variant ?? 0 }; });
   const [saved, setSaved] = useState(false);
   const [newSessionLink, setNewSessionLink] = useState(null);
 
-  const unlock = () => {
-    if (pw === SETTINGS_PASSWORD) { setLocked(false); setPwError(false); }
-    else setPwError(true);
-  };
-
+  const unlock = () => { if (pw === SETTINGS_PASSWORD) { setLocked(false); setPwError(false); } else setPwError(true); };
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
 
-  const selectSession = (s) => {
-    setEditingId(s.id);
-    setForm({ name: s.name, sprintNumber: s.sprintNumber, date: s.date || "", q3Variant: s.q3Variant ?? 0 });
-    setNewSessionLink(null);
-    setSaved(false);
-  };
-
-  const handleNewSession = () => {
-    setEditingId(null);
-    setForm({ name: "", sprintNumber: 1, date: "", q3Variant: 0 });
-    setNewSessionLink(null);
-    setSaved(false);
-  };
+  const selectSession = (s) => { setEditingId(s.id); setForm({ name: s.name, sprintNumber: s.sprintNumber, date: s.date || "", q3Variant: s.q3Variant ?? 0 }); setNewSessionLink(null); setSaved(false); };
+  const handleNewSession = () => { setEditingId(null); setForm({ name: "", sprintNumber: 1, date: "", q3Variant: 0 }); setNewSessionLink(null); setSaved(false); };
 
   const handleSave = () => {
     const id = editingId || (uid() + uid());
-    const session = {
-      id,
-      name: form.name || "Untitled Session",
-      sprintNumber: parseInt(form.sprintNumber) || 1,
-      date: form.date,
-      q3Variant: parseInt(form.q3Variant) || 0,
-      createdAt: editingId ? (sessionStore.get(editingId)?.createdAt || Date.now()) : Date.now(),
-    };
+    const session = { id, name: form.name || "Untitled Session", sprintNumber: parseInt(form.sprintNumber) || 1, date: form.date, q3Variant: parseInt(form.q3Variant) || 0, createdAt: editingId ? (sessionStore.get(editingId)?.createdAt || Date.now()) : Date.now() };
     sessionStore.save(session);
     setSessions(sessionStore.list());
     setEditingId(id);
@@ -1558,22 +1372,16 @@ function SettingsModal({ currentSession, onSave, onClose }) {
             <h2>Settings</h2>
             <p>Enter the facilitator password to make changes.</p>
             <div className="settings-pw-row">
-              <input className="settings-pw-input" type="password" placeholder="Password"
-                value={pw} onChange={e => { setPw(e.target.value); setPwError(false); }}
-                onKeyDown={e => e.key === "Enter" && unlock()} autoFocus />
+              <input className="settings-pw-input" type="password" placeholder="Password" value={pw} onChange={e => { setPw(e.target.value); setPwError(false); }} onKeyDown={e => e.key === "Enter" && unlock()} autoFocus />
               <button className="tool-btn primary" onClick={unlock}>Unlock</button>
             </div>
             {pwError && <div className="settings-pw-error">Incorrect password</div>}
-            <div className="modal-btns" style={{ justifyContent: "center", marginTop: 16 }}>
-              <button className="tool-btn" onClick={onClose}>Cancel</button>
-            </div>
+            <div className="modal-btns" style={{ justifyContent: "center", marginTop: 16 }}><button className="tool-btn" onClick={onClose}>Cancel</button></div>
           </div>
         ) : (
           <>
             <h2>⚙️ Sessions</h2>
             <p>Create and manage retro sessions. Each session gets its own shareable link.</p>
-
-            {/* Session list */}
             <div className="settings-section">
               <div className="settings-section-title">Your Sessions</div>
               <div className="session-list">
@@ -1581,43 +1389,30 @@ function SettingsModal({ currentSession, onSave, onClose }) {
                   <div key={s.id} className={`session-list-item ${editingId === s.id ? "active" : ""}`} onClick={() => selectSession(s)}>
                     <div style={{ flex: 1 }}>
                       <div className="session-list-item-name">{s.name}</div>
-                      <div className="session-list-item-meta">
-                        Sprint {s.sprintNumber}{s.date ? ` · ${s.date}` : ""}
-                        {sessionStore.isExpired(s) ? " · ⏰ Expired" : ""}
-                      </div>
+                      <div className="session-list-item-meta">Sprint {s.sprintNumber}{s.date ? ` · ${s.date}` : ""}{sessionStore.isExpired(s) ? " · ⏰ Expired" : ""}</div>
                     </div>
                     <span className="session-list-item-del" onClick={e => handleDelete(e, s.id)}>🗑</span>
                   </div>
                 ))}
               </div>
-              <button className="tool-btn" onClick={handleNewSession} style={{ width: "100%", justifyContent: "center" }}>
-                ＋ New Session
-              </button>
+              <button className="tool-btn" onClick={handleNewSession} style={{ width: "100%", justifyContent: "center" }}>＋ New Session</button>
             </div>
-
-            {/* Edit form */}
             <div className="settings-section">
               <div className="settings-section-title">{editingId ? "Edit Session" : "New Session"}</div>
-
               <div className="settings-row">
                 <label className="settings-label">Session name</label>
-                <input className="settings-input" placeholder="e.g. Flex1 Sprint 16, MetaCon Retro"
-                  value={form.name} onChange={e => set("name", e.target.value)} />
+                <input className="settings-input" placeholder="e.g. Flex1 Sprint 16, MetaCon Retro" value={form.name} onChange={e => set("name", e.target.value)} />
               </div>
-
               <div style={{ display: "flex", gap: 10 }}>
                 <div className="settings-row" style={{ flex: 1 }}>
                   <label className="settings-label">Sprint #</label>
-                  <input className="settings-input" type="number" min="1"
-                    value={form.sprintNumber} onChange={e => set("sprintNumber", e.target.value)} />
+                  <input className="settings-input" type="number" min="1" value={form.sprintNumber} onChange={e => set("sprintNumber", e.target.value)} />
                 </div>
                 <div className="settings-row" style={{ flex: 2 }}>
                   <label className="settings-label">Date</label>
-                  <input className="settings-input" type="date"
-                    value={form.date} onChange={e => set("date", e.target.value)} />
+                  <input className="settings-input" type="date" value={form.date} onChange={e => set("date", e.target.value)} />
                 </div>
               </div>
-
               <div className="settings-row">
                 <label className="settings-label">Rotating question (Q3)</label>
                 <select className="settings-select" value={form.q3Variant} onChange={e => set("q3Variant", e.target.value)}>
@@ -1625,8 +1420,6 @@ function SettingsModal({ currentSession, onSave, onClose }) {
                 </select>
               </div>
             </div>
-
-            {/* Generated session link */}
             {newSessionLink && (
               <div className="session-link-box">
                 <h3>🔗 Session Link</h3>
@@ -1638,15 +1431,10 @@ function SettingsModal({ currentSession, onSave, onClose }) {
                 <div className="session-expiry">⏰ Expires 24 hours after session creation</div>
               </div>
             )}
-
             <div className="modal-btns">
               <button className="tool-btn" onClick={onClose}>Close</button>
-              {saved
-                ? <span className="settings-saved">✓ Saved!</span>
-                : <button className="tool-btn primary" onClick={handleSave}>
-                    {editingId ? "Save Changes" : "Create Session →"}
-                  </button>
-              }
+              {saved ? <span className="settings-saved">✓ Saved!</span>
+                : <button className="tool-btn primary" onClick={handleSave}>{editingId ? "Save Changes" : "Create Session →"}</button>}
             </div>
           </>
         )}
@@ -1670,7 +1458,6 @@ function JoinScreen({ session, onJoin, joined }) {
   const [q1Val, setQ1Val] = useState("");
   const { greeting, emoji } = getTimeOfDay();
 
-  // Expired session
   if (sessionStore.isExpired(session)) {
     return (
       <div className="join-wrap">
@@ -1684,9 +1471,7 @@ function JoinScreen({ session, onJoin, joined }) {
     );
   }
 
-  const dateLabel = session.date
-    ? new Date(session.date + "T12:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })
-    : "";
+  const dateLabel = session.date ? new Date(session.date + "T12:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "";
 
   return (
     <div className="join-wrap">
@@ -1696,10 +1481,7 @@ function JoinScreen({ session, onJoin, joined }) {
         <div className="join-greeting">{emoji}</div>
         <div className="join-greeting-text">{greeting}! Join the retro session below.</div>
         <div className="join-title">What should we call you?</div>
-        <input className="join-input" placeholder="Your name (max 20 chars)…"
-          value={name} onChange={e => setName(e.target.value.slice(0, 20))}
-          onKeyDown={e => e.key === "Enter" && name.trim() && onJoin(name.trim(), q1Val)}
-          maxLength={20} autoFocus />
+        <input className="join-input" placeholder="Your name (max 20 chars)…" value={name} onChange={e => setName(e.target.value.slice(0, 20))} onKeyDown={e => e.key === "Enter" && name.trim() && onJoin(name.trim(), q1Val)} maxLength={20} autoFocus />
         {name.trim().length > 0 && (
           <div className="join-q1-section">
             <div className="join-q1-label">Optional · Q1</div>
@@ -1708,9 +1490,7 @@ function JoinScreen({ session, onJoin, joined }) {
           </div>
         )}
         <div style={{ marginTop: 20 }}>
-          <button className="join-btn" disabled={!name.trim()} onClick={() => onJoin(name.trim(), q1Val)}>
-            Join Session →
-          </button>
+          <button className="join-btn" disabled={!name.trim()} onClick={() => onJoin(name.trim(), q1Val)}>Join Session →</button>
         </div>
         {joined.length > 0 && (
           <div className="join-presence">
@@ -1736,14 +1516,10 @@ export default function App() {
   const [view, setView] = useState("submit");
   const [showSettings, setShowSettings] = useState(false);
 
-  // Resolve active session from URL ?session= param, or fall back to default
   const [activeSession, setActiveSession] = useState(() => {
     const params = new URLSearchParams(window.location.search);
     const sid = params.get("session");
-    if (sid) {
-      const s = sessionStore.get(sid);
-      if (s) return s;
-    }
+    if (sid) { const s = sessionStore.get(sid); if (s) return s; }
     return getOrCreateDefaultSession();
   });
 
@@ -1761,18 +1537,14 @@ export default function App() {
     try { localStorage.setItem(`rk_name_${activeSession.id}`, name); } catch {}
     const updated = joined.includes(name) ? joined : [...joined, name];
     try { localStorage.setItem(`rk_joined_${activeSession.id}`, JSON.stringify(updated)); } catch {}
-    setJoined(updated);
-    setCurrentUser(name);
+    setJoined(updated); setCurrentUser(name);
     if (q1Val) setJoinQ1(q1Val);
   };
 
-  const handleSaveSettings = (session) => {
-    setActiveSession(session);
-  };
+  const handleSaveSettings = (session) => { setActiveSession(session); };
 
   const handleSwitchSession = (session) => {
     setActiveSession(session);
-    // Update user context for new session
     try {
       const name = localStorage.getItem(`rk_name_${session.id}`);
       setCurrentUser(name || null);
@@ -1782,8 +1554,7 @@ export default function App() {
   };
 
   const questions = QUESTIONS(activeSession.sprintNumber, Q3_VARIANTS[activeSession.q3Variant ?? 0]);
-  const cutoff = DEMO_CUTOFF; // replace with real cutoff when date is set
-
+  const cutoff = DEMO_CUTOFF;
   const allSessions = sessionStore.list();
 
   if (!currentUser) {
@@ -1802,42 +1573,22 @@ export default function App() {
         <nav className="nav">
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
             <div className="nav-brand"><span className="nav-brand-dot" />RetroKit</div>
-
-            {/* Session dropdown — replaces +/- sprint counter */}
             <div className="session-select-wrap">
-              <select
-                className="session-select"
-                value={activeSession.id}
-                onChange={e => {
-                  const s = sessionStore.get(e.target.value);
-                  if (s) handleSwitchSession(s);
-                }}
-              >
-                {allSessions.map(s => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} · Sprint {s.sprintNumber}{s.date ? ` · ${s.date}` : ""}
-                  </option>
-                ))}
+              <select className="session-select" value={activeSession.id} onChange={e => { const s = sessionStore.get(e.target.value); if (s) handleSwitchSession(s); }}>
+                {allSessions.map(s => <option key={s.id} value={s.id}>{s.name} · Sprint {s.sprintNumber}{s.date ? ` · ${s.date}` : ""}</option>)}
               </select>
               <span className="session-select-arrow">▾</span>
             </div>
-
-            {/* Current user chip */}
             <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--bg-raised)", borderRadius: 20, padding: "4px 12px 4px 4px", border: "1px solid var(--border)" }}>
               <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--or-red)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white" }}>{currentUser[0]}</div>
               <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{currentUser}</span>
-              <button onClick={() => { try { localStorage.removeItem(`rk_name_${activeSession.id}`); } catch {} setCurrentUser(null); }}
-                style={{ background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer", fontSize: 13, padding: 0, marginLeft: 2 }} title="Leave session">✕</button>
+              <button onClick={() => { try { localStorage.removeItem(`rk_name_${activeSession.id}`); } catch {} setCurrentUser(null); }} style={{ background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer", fontSize: 13, padding: 0, marginLeft: 2 }} title="Leave session">✕</button>
             </div>
           </div>
-
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div className="nav-tabs">
               {[["submit", "📝 Submit"], ["board", "🗂 Board"], ["history", "📚 Sessions"]].map(([v, label]) => (
-                <button key={v} className={`nav-tab ${view === v ? "active" : ""}`} onClick={() => {
-                  try { window.history.replaceState({}, "", window.location.href.split("?")[0]); } catch {}
-                  setView(v);
-                }}>{label}</button>
+                <button key={v} className={`nav-tab ${view === v ? "active" : ""}`} onClick={() => { try { window.history.replaceState({}, "", window.location.href.split("?")[0]); } catch {} setView(v); }}>{label}</button>
               ))}
             </div>
             <button className="settings-gear" onClick={() => setShowSettings(true)} title="Settings">⚙️</button>
@@ -1850,13 +1601,7 @@ export default function App() {
         {view === "board" && <BoardView session={activeSession} members={joined} questions={questions} currentUser={currentUser} />}
         {view === "history" && <HistoryView onLoadSession={handleSwitchSession} />}
 
-        {showSettings && (
-          <SettingsModal
-            currentSession={activeSession}
-            onSave={handleSaveSettings}
-            onClose={() => setShowSettings(false)}
-          />
-        )}
+        {showSettings && <SettingsModal currentSession={activeSession} onSave={handleSaveSettings} onClose={() => setShowSettings(false)} />}
       </div>
     </>
   );
