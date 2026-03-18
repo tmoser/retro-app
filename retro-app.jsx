@@ -909,16 +909,10 @@ function BoardView({ session, members, questions, currentUser }) {
   const handleDragEnd = () => { if (!dragState.current) return; setFreeCards(cs => { saveFreeCards(cs); return cs; }); dragState.current = null; window.removeEventListener("mousemove", handleDragMove); window.removeEventListener("mouseup", handleDragEnd); };
   const handleEditCard = (cardId, newText) => { setFreeCards(cs => { const updated = cs.map(c => c.id === cardId ? { ...c, content: newText } : c); saveFreeCards(updated); return updated; }); };
   const handleDeleteCard = (cardId) => { setFreeCards(cs => { const updated = cs.filter(c => c.id !== cardId); saveFreeCards(updated); return updated; }); };
-```
 
 **Change 2 — Add the prop on the canvas render**
 
-Find:
-```
 {freeCards.map(card => <div key={card.id} style={{ pointerEvents: "all" }}><FreeCard card={card} onDragStart={handleDragStart} onEdit={handleEditCard} onDelete={handleDeleteCard} /></div>)}
-```
-Replace with:
-```
 <FreeCard card={card} onDragStart={handleDragStart} onEdit={handleEditCard} onDelete={handleDeleteCard} />
 
   useEffect(() => () => { window.removeEventListener("mousemove", handleDragMove); window.removeEventListener("mouseup", handleDragEnd); }, []);
