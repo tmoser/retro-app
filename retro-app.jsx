@@ -1050,7 +1050,46 @@ function SubmitView({ session, questions, currentUser, cutoff, joinQ1 }) {
     </div>
   );
 }
+// ── Export ───────────────────────────────────────────────────────────────────
 
+function exportCSV({ session, questions, cards, freeCards, actionItems }) {
+  const escape = (val) => {
+    const s = typeof val === "object" && val?.url ? `[GIF: ${val.title || "gif"}]` : String(val ?? "");
+    return `"${s.replace(/"/g, '""')}"`;
+  };
+
+  const netVotes = (card) => {
+    const v = card.votes || {};
+    return Object.values(v).reduce((sum, x) => sum + x, 0);
+  };
+
+  const rows = [["Section", "Question", "Author", "Content", "Net Votes"]];
+
+  // Sticky cards grouped by question
+  questions.forEach(q => {
+    cards.filter(c => c.qId === q.id).forEach(c => {
+      rows.push([q.label, q.prompt, c.author, c.content, netVotes(c)]);
+    });
+  });
+
+  // Free cards
+  freeCards.forEach(c => {
+    rows.push(["Free Card", "", c.author, c.content, netVotes(c)]);
+  });
+
+  // Action items
+  actionItems.forEach(item => {
+    rows.push(["Action Item", "", item.owner, item.text, item.done ? "Done" : "Open"]);
+  });
+
+  const csv = rows.map(r => r.map(escape).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const name = `${session.name || "retro"}-sprint${session.sprintNumber}.csv`.replace(/\s+/g, "-").toLowerCase();
+  a.href = url; a.download = name; a.click();
+  URL.revokeObjectURL(url);
+}
 // ── Board View ────────────────────────────────────────────────────────────────
 
 const AI_SUGGESTIONS = {
