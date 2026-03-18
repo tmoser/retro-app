@@ -910,8 +910,6 @@ function BoardView({ session, members, questions, currentUser }) {
   const handleEditCard = (cardId, newText) => { setFreeCards(cs => { const updated = cs.map(c => c.id === cardId ? { ...c, content: newText } : c); saveFreeCards(updated); return updated; }); };
   const handleDeleteCard = (cardId) => { setFreeCards(cs => { const updated = cs.filter(c => c.id !== cardId); saveFreeCards(updated); return updated; }); };
 
-**Change 2 — Add the prop on the canvas render**
-
 {freeCards.map(card => <div key={card.id} style={{ pointerEvents: "all" }}><FreeCard card={card} onDragStart={handleDragStart} onEdit={handleEditCard} onDelete={handleDeleteCard} /></div>)}
 <FreeCard card={card} onDragStart={handleDragStart} onEdit={handleEditCard} onDelete={handleDeleteCard} />
 
@@ -955,7 +953,6 @@ function BoardView({ session, members, questions, currentUser }) {
               {freeCards.map(card => <div key={card.id} style={{ pointerEvents: "all" }}><FreeCard card={card} onDragStart={handleDragStart} onEdit={handleEditCard} /></div>)}
             </div>
 
-            {/* Q columns — no card count badge */}
             {questions.map(q => {
               const qCards = cardsForQ(q.id);
               const ungrouped = qCards.filter(c => !c.groupId);
