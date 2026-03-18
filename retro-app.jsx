@@ -611,8 +611,21 @@ function Q1Picker({ value, onChange }) {
   );
 }
 
-function StickyCard({ card, hidden, onGroup, grouped, groupName }) {
+function StickyCard({ card, hidden, onGroup, grouped, groupName, revealed, currentUser, onVote }) {
   const isGif = card.content && typeof card.content === "object" && card.content.url;
+  const votes = card.votes || {};
+  const myVote = votes[currentUser] || 0;
+  const netScore = Object.values(votes).reduce((sum, v) => sum + v, 0);
+  const upCount = Object.values(votes).filter(v => v === 1).length;
+  const downCount = Object.values(votes).filter(v => v === -1).length;
+
+  const handleVote = (e, dir) => {
+    e.stopPropagation();
+    if (!revealed) return;
+    // Toggle off if same vote, otherwise set new direction
+    onVote(card.id, myVote === dir ? 0 : dir);
+  };
+
   return (
     <div className="sticky" style={{ background: card.color }} onClick={onGroup}>
       {grouped && <span className="sticky-group-badge">📌 {groupName}</span>}
@@ -633,6 +646,48 @@ function StickyCard({ card, hidden, onGroup, grouped, groupName }) {
         </div>
       )}
       {!hidden && <div className="sticky-author">— {card.author}</div>}
+
+      {/* Vote bar — only after reveal */}
+      {revealed && (
+        <div
+          style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, paddingTop: 6, borderTop: "1px solid rgba(0,0,0,.1)" }}
+          onClick={e => e.stopPropagation()}
+        >
+          <button
+            onClick={e => handleVote(e, 1)}
+            style={{
+              display: "flex", alignItems: "center", gap: 3,
+              background: myVote === 1 ? "#ff4500" : "rgba(0,0,0,.1)",
+              border: "none", borderRadius: 4, padding: "2px 7px",
+              cursor: "pointer", fontSize: 12, fontWeight: 700,
+              color: myVote === 1 ? "white" : "rgba(0,0,0,.55)",
+              transition: "all .15s",
+            }}
+            title="Upvote"
+          >
+            ▲ {upCount > 0 ? upCount : ""}
+          </button>
+          <button
+            onClick={e => handleVote(e, -1)}
+            style={{
+              display: "flex", alignItems: "center", gap: 3,
+              background: myVote === -1 ? "#7193ff" : "rgba(0,0,0,.1)",
+              border: "none", borderRadius: 4, padding: "2px 7px",
+              cursor: "pointer", fontSize: 12, fontWeight: 700,
+              color: myVote === -1 ? "white" : "rgba(0,0,0,.55)",
+              transition: "all .15s",
+            }}
+            title="Downvote"
+          >
+            ▼ {downCount > 0 ? downCount : ""}
+          </button>
+          {netScore !== 0 && (
+            <span style={{ fontSize: 11, fontWeight: 700, color: netScore > 0 ? "#ff4500" : "#7193ff", marginLeft: "auto" }}>
+              {netScore > 0 ? "+" : ""}{netScore}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
