@@ -813,16 +813,13 @@ function FreeCard({ card, onDragStart, onEdit, onDelete }) {
   return (
     <div style={{ position: "absolute", left: card.x, top: card.y, width: 200, background: card.color, borderRadius: 10, padding: "12px 14px", boxShadow: "2px 3px 0 rgba(0,0,0,.18)", cursor: editing ? "text" : "grab", userSelect: "none", zIndex: editing ? 50 : 10, border: editing ? "2px solid #333" : "2px solid transparent" }}
       onMouseDown={e => { if (editing) return; e.preventDefault(); onDragStart(e, card.id); }} onDoubleClick={handleDoubleClick}>
-      
-      {/* Delete button — top right */}
       {!editing && (
         <button
           onMouseDown={e => { e.stopPropagation(); e.preventDefault(); onDelete(card.id); }}
-          style={{ position: "absolute", top: 4, right: 4, width: 18, height: 18, borderRadius: "50%", border: "none", background: "rgba(0,0,0,.18)", color: "rgba(0,0,0,.5)", fontSize: 11, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1, padding: 0 }}
+          style={{ position: "absolute", top: 4, right: 4, width: 18, height: 18, borderRadius: "50%", border: "none", background: "rgba(0,0,0,.2)", color: "rgba(0,0,0,.6)", fontSize: 11, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, lineHeight: 1 }}
           title="Delete card"
         >×</button>
       )}
-
       {editing ? (
         <div style={{ position: "relative" }}>
           <textarea ref={editorRef} value={text} onChange={e => setText(e.target.value)} onBlur={handleBlur} onKeyDown={e => { if (e.key === "Escape") { setEditing(false); onEdit(card.id, text); } }} style={{ width: "100%", minHeight: 60, border: "none", background: "transparent", fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#1a1a1a", resize: "none", outline: "none", lineHeight: 1.5 }} />
@@ -830,9 +827,7 @@ function FreeCard({ card, onDragStart, onEdit, onDelete }) {
           {showEmoji && <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 400 }}><EmojiPopup onSelect={insertEmoji} onClose={() => setShowEmoji(false)} /></div>}
         </div>
       ) : (
-        <div style={{ fontSize: 13, color: "#1a1a1a", lineHeight: 1.5, fontWeight: 500, minHeight: 24, wordBreak: "break-word", paddingRight: 14 }}>
-          {text || <span style={{ opacity: 0.4, fontStyle: "italic" }}>Double-click to edit…</span>}
-        </div>
+        <div style={{ fontSize: 13, color: "#1a1a1a", lineHeight: 1.5, fontWeight: 500, minHeight: 24, wordBreak: "break-word", paddingRight: 14 }}>{text || <span style={{ opacity: 0.4, fontStyle: "italic" }}>Double-click to edit…</span>}</div>
       )}
       <div style={{ fontSize: 11, color: "rgba(0,0,0,.5)", marginTop: 6, fontWeight: 600, display: "flex", justifyContent: "space-between" }}>
         <span>— {card.author}</span>{!editing && <span style={{ opacity: 0.5, fontSize: 10 }}>✎ dbl-click</span>}
@@ -910,9 +905,6 @@ function BoardView({ session, members, questions, currentUser }) {
   const handleEditCard = (cardId, newText) => { setFreeCards(cs => { const updated = cs.map(c => c.id === cardId ? { ...c, content: newText } : c); saveFreeCards(updated); return updated; }); };
   const handleDeleteCard = (cardId) => { setFreeCards(cs => { const updated = cs.filter(c => c.id !== cardId); saveFreeCards(updated); return updated; }); };
 
-{freeCards.map(card => <div key={card.id} style={{ pointerEvents: "all" }}><FreeCard card={card} onDragStart={handleDragStart} onEdit={handleEditCard} onDelete={handleDeleteCard} /></div>)}
-<FreeCard card={card} onDragStart={handleDragStart} onEdit={handleEditCard} onDelete={handleDeleteCard} />
-
   useEffect(() => () => { window.removeEventListener("mousemove", handleDragMove); window.removeEventListener("mouseup", handleDragEnd); }, []);
 
   const dropReaction = (emoji) => { const id = uid(); const x = 100 + Math.random() * (window.innerWidth - 200); const y = 100 + Math.random() * (window.innerHeight - 200); setReactions(r => [...r, { id, emoji, x, y }]); setTimeout(() => setReactions(r => r.filter(rx => rx.id !== id)), 2400); };
@@ -950,9 +942,10 @@ function BoardView({ session, members, questions, currentUser }) {
           <div style={{ display: "flex", gap: 20, alignItems: "flex-start", minWidth: "max-content", position: "relative" }}>
             {/* Free cards canvas */}
             <div ref={canvasRef} style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 20 }}>
-              {freeCards.map(card => <div key={card.id} style={{ pointerEvents: "all" }}><FreeCard card={card} onDragStart={handleDragStart} onEdit={handleEditCard} /></div>)}
+              {freeCards.map(card => <div key={card.id} style={{ pointerEvents: "all" }}><FreeCard card={card} onDragStart={handleDragStart} onEdit={handleEditCard} onDelete={handleDeleteCard} /></div>)}
             </div>
 
+            {/* Q columns — no card count badge */}
             {questions.map(q => {
               const qCards = cardsForQ(q.id);
               const ungrouped = qCards.filter(c => !c.groupId);
