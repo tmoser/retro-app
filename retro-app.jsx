@@ -908,6 +908,18 @@ function BoardView({ session, members, questions, currentUser }) {
   const handleDragMove = (e) => { const d = dragState.current; if (!d) return; const dx = e.clientX - d.startX, dy = e.clientY - d.startY; setFreeCards(cs => cs.map(c => c.id === d.cardId ? { ...c, x: Math.max(0, d.origX + dx), y: Math.max(0, d.origY + dy) } : c)); };
   const handleDragEnd = () => { if (!dragState.current) return; setFreeCards(cs => { saveFreeCards(cs); return cs; }); dragState.current = null; window.removeEventListener("mousemove", handleDragMove); window.removeEventListener("mouseup", handleDragEnd); };
   const handleEditCard = (cardId, newText) => { setFreeCards(cs => { const updated = cs.map(c => c.id === cardId ? { ...c, content: newText } : c); saveFreeCards(updated); return updated; }); };
+  const handleDeleteCard = (cardId) => { setFreeCards(cs => { const updated = cs.filter(c => c.id !== cardId); saveFreeCards(updated); return updated; }); };
+```
+
+**Change 2 — Add the prop on the canvas render**
+
+Find:
+```
+<FreeCard card={card} onDragStart={handleDragStart} onEdit={handleEditCard} />
+```
+Replace with:
+```
+<FreeCard card={card} onDragStart={handleDragStart} onEdit={handleEditCard} onDelete={handleDeleteCard} />
 
   useEffect(() => () => { window.removeEventListener("mousemove", handleDragMove); window.removeEventListener("mouseup", handleDragEnd); }, []);
 
