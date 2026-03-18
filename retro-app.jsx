@@ -802,7 +802,7 @@ const AI_SUGGESTIONS = {
 };
 const REACTION_EMOJIS = ["🔥","💯","👏","😅","🚀","💡","🤔","😬","🙌","❤️","😂","👀"];
 
-function FreeCard({ card, onDragStart, onEdit }) {
+function FreeCard({ card, onDragStart, onEdit, onDelete }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(card.content);
   const [showEmoji, setShowEmoji] = useState(false);
@@ -813,6 +813,16 @@ function FreeCard({ card, onDragStart, onEdit }) {
   return (
     <div style={{ position: "absolute", left: card.x, top: card.y, width: 200, background: card.color, borderRadius: 10, padding: "12px 14px", boxShadow: "2px 3px 0 rgba(0,0,0,.18)", cursor: editing ? "text" : "grab", userSelect: "none", zIndex: editing ? 50 : 10, border: editing ? "2px solid #333" : "2px solid transparent" }}
       onMouseDown={e => { if (editing) return; e.preventDefault(); onDragStart(e, card.id); }} onDoubleClick={handleDoubleClick}>
+      
+      {/* Delete button — top right */}
+      {!editing && (
+        <button
+          onMouseDown={e => { e.stopPropagation(); e.preventDefault(); onDelete(card.id); }}
+          style={{ position: "absolute", top: 4, right: 4, width: 18, height: 18, borderRadius: "50%", border: "none", background: "rgba(0,0,0,.18)", color: "rgba(0,0,0,.5)", fontSize: 11, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1, padding: 0 }}
+          title="Delete card"
+        >×</button>
+      )}
+
       {editing ? (
         <div style={{ position: "relative" }}>
           <textarea ref={editorRef} value={text} onChange={e => setText(e.target.value)} onBlur={handleBlur} onKeyDown={e => { if (e.key === "Escape") { setEditing(false); onEdit(card.id, text); } }} style={{ width: "100%", minHeight: 60, border: "none", background: "transparent", fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#1a1a1a", resize: "none", outline: "none", lineHeight: 1.5 }} />
@@ -820,7 +830,9 @@ function FreeCard({ card, onDragStart, onEdit }) {
           {showEmoji && <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 400 }}><EmojiPopup onSelect={insertEmoji} onClose={() => setShowEmoji(false)} /></div>}
         </div>
       ) : (
-        <div style={{ fontSize: 13, color: "#1a1a1a", lineHeight: 1.5, fontWeight: 500, minHeight: 24, wordBreak: "break-word" }}>{text || <span style={{ opacity: 0.4, fontStyle: "italic" }}>Double-click to edit…</span>}</div>
+        <div style={{ fontSize: 13, color: "#1a1a1a", lineHeight: 1.5, fontWeight: 500, minHeight: 24, wordBreak: "break-word", paddingRight: 14 }}>
+          {text || <span style={{ opacity: 0.4, fontStyle: "italic" }}>Double-click to edit…</span>}
+        </div>
       )}
       <div style={{ fontSize: 11, color: "rgba(0,0,0,.5)", marginTop: 6, fontWeight: 600, display: "flex", justifyContent: "space-between" }}>
         <span>— {card.author}</span>{!editing && <span style={{ opacity: 0.5, fontSize: 10 }}>✎ dbl-click</span>}
