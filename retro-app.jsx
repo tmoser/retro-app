@@ -1111,10 +1111,101 @@ const AI_SUGGESTIONS = {
 const REACTION_EMOJIS = ["🔥","💯","👏","😅","🚀","💡","🤔","😬","🙌","❤️","😂","👀"];
 const AVATAR_COLORS = ["#D3002D","#1a73e8","#188038","#e37400","#7b1fa2","#0097a7","#c62828","#2e7d32"];
 
+function FreeCard({ card, onDragStart, onEdit, currentUser }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(card.content);
+  const [showEmoji, setShowEmoji] = useState(false);
+  const editorRef = useRef(null);
+
+  const handleDoubleClick = (e) => {
+    e.stopPropagation();
+    setEditing(true);
+    setTimeout(() => editorRef.current?.focus(), 0);
+  };
+
+  const handleBlur = () => {
+    setEditing(false);
+    setShowEmoji(false);
+    onEdit(card.id, text);
+  };
+
+  const insertEmoji = (emoji) => {
+    setText(t => t + emoji);
+    setShowEmoji(false);
+    setTimeout(() => editorRef.current?.focus(), 0);
+  };
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: card.x,
+        top: card.y,
+        width: 200,
+        background: card.color,
+        borderRadius: 10,
+        padding: "12px 14px",
+        boxShadow: "2px 3px 0 rgba(0,0,0,.18)",
+        cursor: editing ? "text" : "grab",
+        userSelect: "none",
+        zIndex: editing ? 50 : 10,
+        border: editing ? "2px solid #333" : "2px solid transparent",
+      }}
+      onMouseDown={(e) => {
+        if (editing) return;
+        e.preventDefault();
+        onDragStart(e, card.id);
+      }}
+      onDoubleClick={handleDoubleClick}
+    >
+      {editing ? (
+        <div style={{ position: "relative" }}>
+          <textarea
+            ref={editorRef}
+            value={text}
+            onChange={e => setText(e.target.value)}
+            onBlur={handleBlur}
+            onKeyDown={e => { if (e.key === "Escape") { setEditing(false); onEdit(card.id, text); } }}
+            style={{
+              width: "100%",
+              minHeight: 60,
+              border: "none",
+              background: "transparent",
+              fontFamily: "'DM Sans', sans-serif",
+              fontSize: 13,
+              color: "#1a1a1a",
+              resize: "none",
+              outline: "none",
+              lineHeight: 1.5,
+            }}
+          />
+          <button
+            onMouseDown={e => { e.preventDefault(); setShowEmoji(s => !s); }}
+            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, padding: "2px 4px", opacity: 0.7 }}
+            title="Insert emoji"
+          >😊</button>
+          {showEmoji && (
+            <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 400 }}>
+              <EmojiPopup onSelect={insertEmoji} onClose={() => setShowEmoji(false)} />
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={{ fontSize: 13, color: "#1a1a1a", lineHeight: 1.5, fontWeight: 500, minHeight: 24, wordBreak: "break-word" }}>
+          {text || <span style={{ opacity: 0.4, fontStyle: "italic" }}>Double-click to edit…</span>}
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: "rgba(0,0,0,.5)", marginTop: 6, fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span>— {card.author}</span>
+        {!editing && <span style={{ opacity: 0.5, fontSize: 10 }}>✎ dbl-click</span>}
+      </div>
+    </div>
+  );
+}
+
 function BoardView({ sprintNumber, members, questions, currentUser, currentVibe }) {
   questions = questions || QUESTIONS(sprintNumber);
   const [cards, setCards] = useState(() => {
-    // Load real submissions from localStorage
     try {
       const keys = Object.keys(localStorage).filter(k => k.startsWith("rk_sub_"));
       const subs = keys.map(k => JSON.parse(localStorage.getItem(k))).filter(s => s && s.sprintNumber === sprintNumber);
@@ -1136,6 +1227,82 @@ function BoardView({ sprintNumber, members, questions, currentUser, currentVibe 
     } catch {}
     return seedCards(sprintNumber);
   });
+
+  const [freeCards, setFreeCards] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(`rk_free_${sprintNumber}`) || "[]");
+    } catch { return []; }
+  });
+
+  const canvasRef = useRef(null);
+  const dragState = useRef(null); // { cardId, startX, startY, origX, origY }
+
+  const saveFreeCards = (cards) => {
+    try { localStorage.setItem(`rk_free_${sprintNumber}`, JSON.stringify(cards)); } catch {}
+  };
+
+  const addFreeCard = () => {
+    const canvas = canvasRef.current;
+    const rect = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0, width: 800, height: 600 };
+    // Center of visible canvas area
+    const x = Math.round(rect.width / 2 - 100);
+    const y = Math.round(window.scrollY - rect.top + window.innerHeight / 2 - 60);
+    const newCard = {
+      id: uid(),
+      content: "",
+      author: currentUser || "You",
+      color: randomColor(),
+      x: Math.max(0, x),
+      y: Math.max(0, y),
+    };
+    const updated = [...freeCards, newCard];
+    setFreeCards(updated);
+    saveFreeCards(updated);
+  };
+
+  const handleDragStart = (e, cardId) => {
+    const card = freeCards.find(c => c.id === cardId);
+    if (!card) return;
+    dragState.current = { cardId, startX: e.clientX, startY: e.clientY, origX: card.x, origY: card.y };
+    window.addEventListener("mousemove", handleDragMove);
+    window.addEventListener("mouseup", handleDragEnd);
+  };
+
+  const handleDragMove = (e) => {
+    const d = dragState.current;
+    if (!d) return;
+    const dx = e.clientX - d.startX;
+    const dy = e.clientY - d.startY;
+    setFreeCards(cs => cs.map(c => c.id === d.cardId ? { ...c, x: Math.max(0, d.origX + dx), y: Math.max(0, d.origY + dy) } : c));
+  };
+
+  const handleDragEnd = () => {
+    if (!dragState.current) return;
+    setFreeCards(cs => {
+      saveFreeCards(cs);
+      return cs;
+    });
+    dragState.current = null;
+    window.removeEventListener("mousemove", handleDragMove);
+    window.removeEventListener("mouseup", handleDragEnd);
+  };
+
+  const handleEditCard = (cardId, newText) => {
+    setFreeCards(cs => {
+      const updated = cs.map(c => c.id === cardId ? { ...c, content: newText } : c);
+      saveFreeCards(updated);
+      return updated;
+    });
+  };
+
+  // Cleanup listeners on unmount
+  useEffect(() => {
+    return () => {
+      window.removeEventListener("mousemove", handleDragMove);
+      window.removeEventListener("mouseup", handleDragEnd);
+    };
+  }, []);
+
   const [revealed, setRevealed] = useState(false);
   const [groups, setGroups] = useState({});
   const [actionItems, setActionItems] = useState([
@@ -1162,17 +1329,12 @@ function BoardView({ sprintNumber, members, questions, currentUser, currentVibe 
   };
 
   const cardsForQ = (qId) => cards.filter(c => c.qId === qId);
-
-  const applyGroup = (cardId, groupId) => {
-    setCards(cs => cs.map(c => c.id === cardId ? { ...c, groupId } : c));
-  };
-
+  const applyGroup = (cardId, groupId) => setCards(cs => cs.map(c => c.id === cardId ? { ...c, groupId } : c));
   const createGroup = (qId, name) => {
     const gid = uid();
     setGroups(g => ({ ...g, [gid]: { name, qId } }));
     return gid;
   };
-
   const toggleDone = (id) => setActionItems(a => a.map(i => i.id === id ? { ...i, done: !i.done } : i));
   const deleteAction = (id) => setActionItems(a => a.filter(i => i.id !== id));
   const addAction = () => {
@@ -1180,7 +1342,6 @@ function BoardView({ sprintNumber, members, questions, currentUser, currentVibe 
     setActionItems(a => [...a, { id: uid(), text: newAction, owner: newOwner || "TBD", done: false }]);
     setNewAction(""); setNewOwner("");
   };
-
   const groupsForQ = (qId) => Object.entries(groups).filter(([, v]) => v.qId === qId);
 
   return (
@@ -1194,7 +1355,6 @@ function BoardView({ sprintNumber, members, questions, currentUser, currentVibe 
             <span className="presence-name">{p.name}{p.vibe ? ` ${p.vibe}` : ""}</span>
           </div>
         ))}
-
       </div>
 
       {/* Reaction bar */}
@@ -1202,169 +1362,192 @@ function BoardView({ sprintNumber, members, questions, currentUser, currentVibe 
         <div className="reaction-bar">
           <span className="reaction-bar-label">React</span>
           {REACTION_EMOJIS.map(e => (
-            <button key={e} className="reaction-emoji-btn" onClick={() => dropReaction(e)} title={`Drop ${e}`}>{e}</button>
+            <button key={e} className="reaction-emoji-btn" onClick={() => dropReaction(e)}>{e}</button>
           ))}
         </div>
       )}
 
-      {/* Floating drops */}
       {reactions.map(r => (
         <div key={r.id} className="reaction-drop" style={{ left: r.x, top: r.y }}>{r.emoji}</div>
       ))}
 
       <div style={{ padding: "16px 24px 0" }}>
-      <div className="board-toolbar">
-        <div className="board-title">Sprint {sprintNumber} — Facilitation Board</div>
-        {!revealed
-          ? <button className="tool-btn primary" onClick={() => setRevealed(true)}>👁 Reveal All Cards</button>
-          : <span className="tag" style={{ background: "#6BCB77", color: "white" }}>✓ Cards Revealed</span>
-        }
-        <button className="tool-btn" onClick={() => setShowAI("q3")}>✨ AI Group Suggestions</button>
-      </div>
-
-      {!revealed && (
-        <div style={{ background: "rgba(255,200,0,.07)", borderRadius: 10, padding: "10px 16px", marginBottom: 16, fontSize: 14, color: "#d4a700", border: "1px solid rgba(255,200,0,.15)" }}>
-          🔒 Cards are hidden until you reveal them. Click <strong>Reveal All Cards</strong> to show responses to the team.
-        </div>
-      )}
-
-      <div style={{ display: "flex", gap: 20, alignItems: "flex-start", flexWrap: "wrap" }}>
-        <div className="board-columns">
-          {questions.map(q => {
-            const qCards = cardsForQ(q.id);
-            const ungrouped = qCards.filter(c => !c.groupId);
-            const qGroups = groupsForQ(q.id);
-
-            return (
-              <div key={q.id} className="col">
-                <div className="col-header" style={{ background: q.color }}>
-                  <div className="col-header-title">{q.prompt}</div>
-                  <div className="col-count">{qCards.length}</div>
-                </div>
-                <div className="col-body">
-                  {revealed && <div className="revealed-banner">✓ Revealed</div>}
-
-                  {/* Groups */}
-                  {qGroups.map(([gid, gdata]) => {
-                    const gCards = qCards.filter(c => c.groupId === gid);
-                    return (
-                      <div key={gid} className="group-block">
-                        <div className="group-label">
-                          <input value={gdata.name} onChange={e => setGroups(g => ({ ...g, [gid]: { ...g[gid], name: e.target.value } }))} />
-                          <span style={{ fontSize: 11, color: "#999" }}>{gCards.length} cards</span>
-                        </div>
-                        {gCards.map(c => (
-                          <StickyCard key={c.id} card={c} hidden={!revealed} grouped groupName={gdata.name}
-                            onGroup={() => setGroupingCard(c)} />
-                        ))}
-                      </div>
-                    );
-                  })}
-
-                  {/* Ungrouped */}
-                  {ungrouped.map(c => (
-                    <StickyCard key={c.id} card={c} hidden={!revealed}
-                      onGroup={() => revealed && setGroupingCard(c)} />
-                  ))}
-
-                  {qCards.length === 0 && (
-                    <div style={{ textAlign: "center", color: "#bbb", fontSize: 13, padding: "20px 0" }}>No responses yet</div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+        <div className="board-toolbar">
+          <div className="board-title">Sprint {sprintNumber} — Facilitation Board</div>
+          <button className="tool-btn primary" onClick={addFreeCard}>＋ Add Card</button>
+          {!revealed
+            ? <button className="tool-btn" onClick={() => setRevealed(true)}>👁 Reveal All Cards</button>
+            : <span className="tag" style={{ background: "#6BCB77", color: "white" }}>✓ Cards Revealed</span>
+          }
+          <button className="tool-btn" onClick={() => setShowAI("q3")}>✨ AI Group Suggestions</button>
         </div>
 
-        {/* Action Items Panel */}
-        <div className="actions-panel" style={{ position: "sticky", top: 80 }}>
-          <div className="actions-title">✅ Action Items</div>
-          {actionItems.map(item => (
-            <div key={item.id} className="action-item">
-              <div className={`action-check ${item.done ? "done" : ""}`} onClick={() => toggleDone(item.id)}>
-                {item.done && "✓"}
-              </div>
-              <div className={`action-text ${item.done ? "done" : ""}`}>{item.text}</div>
-              <div className="action-owner">{item.owner}</div>
-              <div className="action-delete" onClick={() => deleteAction(item.id)}>×</div>
-            </div>
-          ))}
-          <div className="add-action">
-            <input placeholder="New action item..." value={newAction} onChange={e => setNewAction(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && addAction()} />
-            <input placeholder="Owner" value={newOwner} onChange={e => setNewOwner(e.target.value)}
-              style={{ width: 80, border: "2px solid #e8e8e8", borderRadius: 8, padding: "8px 10px", fontFamily: "DM Sans, sans-serif", fontSize: 14, outline: "none" }}
-              onKeyDown={e => e.key === "Enter" && addAction()} />
-            <button className="add-action-btn" onClick={addAction}>+</button>
+        {!revealed && (
+          <div style={{ background: "rgba(255,200,0,.07)", borderRadius: 10, padding: "10px 16px", marginBottom: 16, fontSize: 14, color: "#d4a700", border: "1px solid rgba(255,200,0,.15)" }}>
+            🔒 Cards are hidden until you reveal them. Click <strong>Reveal All Cards</strong> to show responses.
           </div>
-        </div>
-      </div>
+        )}
 
-      {/* AI Suggestions Modal */}
-      {showAI && (
-        <div className="modal-overlay" onClick={() => setShowAI(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <h2>✨ AI Grouping Suggestions</h2>
-            <p>Based on the card content, here are suggested theme groupings for Q3:</p>
-            {(AI_SUGGESTIONS[showAI] || []).map((s, i) => (
-              <div key={i} className="ai-suggestion">
-                <div className="ai-suggestion-title">📁 {s.label}</div>
-                {s.cards.map((c, j) => (
-                  <div key={j} className="suggestion-item">
-                    <span>🟡</span>
-                    <span>Cards mentioning <em>{c}</em></span>
-                    <span className="suggestion-apply" onClick={() => {
-                      const gid = createGroup(showAI, s.label);
-                      cards.filter(card => card.qId === showAI && card.content.toLowerCase().includes(c.toLowerCase()))
-                        .forEach(card => applyGroup(card.id, gid));
-                      setShowAI(null);
-                    }}>Apply →</span>
+        {freeCards.length > 0 && (
+          <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 8 }}>
+            💡 <strong style={{ color: "var(--text-muted)" }}>{freeCards.length} free card{freeCards.length !== 1 ? "s" : ""}</strong> on the canvas — drag to reposition, double-click to edit
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 20, alignItems: "flex-start", flexWrap: "wrap" }}>
+          {/* Freeform canvas + columns wrapper */}
+          <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
+            {/* Free cards canvas */}
+            <div
+              ref={canvasRef}
+              style={{
+                position: "absolute",
+                inset: 0,
+                pointerEvents: "none",
+                zIndex: 20,
+                minHeight: "100%",
+              }}
+            >
+              {freeCards.map(card => (
+                <div key={card.id} style={{ pointerEvents: "all" }}>
+                  <FreeCard
+                    card={card}
+                    onDragStart={handleDragStart}
+                    onEdit={handleEditCard}
+                    currentUser={currentUser}
+                  />
+                </div>
+              ))}
+            </div>
+
+            {/* Column board */}
+            <div className="board-columns" style={{ position: "relative", zIndex: 1 }}>
+              {questions.map(q => {
+                const qCards = cardsForQ(q.id);
+                const ungrouped = qCards.filter(c => !c.groupId);
+                const qGroups = groupsForQ(q.id);
+                return (
+                  <div key={q.id} className="col">
+                    <div className="col-header" style={{ background: q.color }}>
+                      <div className="col-header-title">{q.prompt}</div>
+                      <div className="col-count">{qCards.length}</div>
+                    </div>
+                    <div className="col-body">
+                      {revealed && <div className="revealed-banner">✓ Revealed</div>}
+                      {qGroups.map(([gid, gdata]) => {
+                        const gCards = qCards.filter(c => c.groupId === gid);
+                        return (
+                          <div key={gid} className="group-block">
+                            <div className="group-label">
+                              <input value={gdata.name} onChange={e => setGroups(g => ({ ...g, [gid]: { ...g[gid], name: e.target.value } }))} />
+                              <span style={{ fontSize: 11, color: "#999" }}>{gCards.length} cards</span>
+                            </div>
+                            {gCards.map(c => (
+                              <StickyCard key={c.id} card={c} hidden={!revealed} grouped groupName={gdata.name} onGroup={() => setGroupingCard(c)} />
+                            ))}
+                          </div>
+                        );
+                      })}
+                      {ungrouped.map(c => (
+                        <StickyCard key={c.id} card={c} hidden={!revealed} onGroup={() => revealed && setGroupingCard(c)} />
+                      ))}
+                      {qCards.length === 0 && (
+                        <div style={{ textAlign: "center", color: "#bbb", fontSize: 13, padding: "20px 0" }}>No responses yet</div>
+                      )}
+                    </div>
                   </div>
-                ))}
-              </div>
-            ))}
-            <div className="modal-btns">
-              <button className="tool-btn" onClick={() => setShowAI(null)}>Close</button>
+                );
+              })}
             </div>
           </div>
-        </div>
-      )}
 
-      {/* Group Assignment Modal */}
-      {groupingCard && (
-        <div className="modal-overlay" onClick={() => setGroupingCard(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <h2>Group This Card</h2>
-            <div className="sticky" style={{ background: groupingCard.color, marginBottom: 20 }}>
-              <div className="sticky-content">{groupingCard.content}</div>
-            </div>
-            <p>Add to an existing group or create a new one:</p>
-            {groupsForQ(groupingCard.qId).map(([gid, gdata]) => (
-              <div key={gid} className="suggestion-item" style={{ border: "1px solid #eee", borderRadius: 8, marginBottom: 6 }}
-                onClick={() => { applyGroup(groupingCard.id, gid); setGroupingCard(null); }}>
-                📁 {gdata.name} <span className="suggestion-apply">Add here →</span>
+          {/* Action Items Panel */}
+          <div className="actions-panel" style={{ position: "sticky", top: 80, flexShrink: 0 }}>
+            <div className="actions-title">✅ Action Items</div>
+            {actionItems.map(item => (
+              <div key={item.id} className="action-item">
+                <div className={`action-check ${item.done ? "done" : ""}`} onClick={() => toggleDone(item.id)}>{item.done && "✓"}</div>
+                <div className={`action-text ${item.done ? "done" : ""}`}>{item.text}</div>
+                <div className="action-owner">{item.owner}</div>
+                <div className="action-delete" onClick={() => deleteAction(item.id)}>×</div>
               </div>
             ))}
-            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-              <input className="text-input" style={{ minHeight: "unset", height: 40 }} placeholder="New group name..."
-                value={newGroupName} onChange={e => setNewGroupName(e.target.value)} />
-              <button className="tool-btn primary" onClick={() => {
-                if (!newGroupName.trim()) return;
-                const gid = createGroup(groupingCard.qId, newGroupName);
-                applyGroup(groupingCard.id, gid);
-                setNewGroupName(""); setGroupingCard(null);
-              }}>Create</button>
-            </div>
-            <div className="modal-btns">
-              {groupingCard.groupId && (
-                <button className="tool-btn danger" onClick={() => { applyGroup(groupingCard.id, null); setGroupingCard(null); }}>Remove from group</button>
-              )}
-              <button className="tool-btn" onClick={() => setGroupingCard(null)}>Cancel</button>
+            <div className="add-action">
+              <input placeholder="New action item..." value={newAction} onChange={e => setNewAction(e.target.value)} onKeyDown={e => e.key === "Enter" && addAction()} />
+              <input placeholder="Owner" value={newOwner} onChange={e => setNewOwner(e.target.value)}
+                style={{ width: 80, border: "2px solid #e8e8e8", borderRadius: 8, padding: "8px 10px", fontFamily: "DM Sans, sans-serif", fontSize: 14, outline: "none" }}
+                onKeyDown={e => e.key === "Enter" && addAction()} />
+              <button className="add-action-btn" onClick={addAction}>+</button>
             </div>
           </div>
         </div>
-      )}
-    </div>
+
+        {/* AI Suggestions Modal */}
+        {showAI && (
+          <div className="modal-overlay" onClick={() => setShowAI(null)}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              <h2>✨ AI Grouping Suggestions</h2>
+              <p>Based on the card content, here are suggested theme groupings for Q3:</p>
+              {(AI_SUGGESTIONS[showAI] || []).map((s, i) => (
+                <div key={i} className="ai-suggestion">
+                  <div className="ai-suggestion-title">📁 {s.label}</div>
+                  {s.cards.map((c, j) => (
+                    <div key={j} className="suggestion-item"
+                      onClick={() => {
+                        const gid = createGroup(showAI, s.label);
+                        cards.filter(card => card.qId === showAI && card.content.toLowerCase().includes(c.toLowerCase()))
+                          .forEach(card => applyGroup(card.id, gid));
+                        setShowAI(null);
+                      }}>
+                      <span>🟡</span>
+                      <span>Cards mentioning <em>{c}</em></span>
+                      <span className="suggestion-apply">Apply →</span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+              <div className="modal-btns">
+                <button className="tool-btn" onClick={() => setShowAI(null)}>Close</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Group Assignment Modal */}
+        {groupingCard && (
+          <div className="modal-overlay" onClick={() => setGroupingCard(null)}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              <h2>Group This Card</h2>
+              <div className="sticky" style={{ background: groupingCard.color, marginBottom: 20 }}>
+                <div className="sticky-content">{groupingCard.content}</div>
+              </div>
+              <p>Add to an existing group or create a new one:</p>
+              {groupsForQ(groupingCard.qId).map(([gid, gdata]) => (
+                <div key={gid} className="suggestion-item" style={{ border: "1px solid #eee", borderRadius: 8, marginBottom: 6 }}
+                  onClick={() => { applyGroup(groupingCard.id, gid); setGroupingCard(null); }}>
+                  📁 {gdata.name} <span className="suggestion-apply">Add here →</span>
+                </div>
+              ))}
+              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                <input className="text-input" style={{ minHeight: "unset", height: 40 }} placeholder="New group name..."
+                  value={newGroupName} onChange={e => setNewGroupName(e.target.value)} />
+                <button className="tool-btn primary" onClick={() => {
+                  if (!newGroupName.trim()) return;
+                  const gid = createGroup(groupingCard.qId, newGroupName);
+                  applyGroup(groupingCard.id, gid);
+                  setNewGroupName(""); setGroupingCard(null);
+                }}>Create</button>
+              </div>
+              <div className="modal-btns">
+                {groupingCard.groupId && (
+                  <button className="tool-btn danger" onClick={() => { applyGroup(groupingCard.id, null); setGroupingCard(null); }}>Remove from group</button>
+                )}
+                <button className="tool-btn" onClick={() => setGroupingCard(null)}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
