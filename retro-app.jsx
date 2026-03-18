@@ -915,7 +915,7 @@ function BoardView({ session, members, questions, currentUser }) {
 
 Find:
 ```
-<FreeCard card={card} onDragStart={handleDragStart} onEdit={handleEditCard} />
+{freeCards.map(card => <div key={card.id} style={{ pointerEvents: "all" }}><FreeCard card={card} onDragStart={handleDragStart} onEdit={handleEditCard} onDelete={handleDeleteCard} /></div>)}
 ```
 Replace with:
 ```
