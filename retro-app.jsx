@@ -171,9 +171,15 @@ const css = `
   .nav-brand { font-size: 15px; font-weight: 700; color: var(--white); letter-spacing: -.3px; display: flex; align-items: center; gap: 8px; }
   .nav-brand-dot { width: 8px; height: 8px; background: var(--red); border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 8px var(--red); }
   .nav-tabs { display: flex; gap: 1px; }
-  .nav-tab { padding: 6px 14px; border-radius: var(--radius); border: none; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 500; transition: all .15s; background: transparent; color: var(--text-muted); }
+  .nav-tab { padding: 6px 14px; border-radius: var(--radius); border: none; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 500; transition: all .15s; background: transparent; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
   .nav-tab:hover { background: var(--bg-raised); color: var(--text); }
   .nav-tab.active { background: var(--bg-raised); color: var(--text); border: 1px solid var(--border-light); }
+  .nav-tab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); box-shadow: 0 0 6px var(--red); animation: pulse-dot 1.2s ease-in-out infinite; flex-shrink: 0; }
+  @keyframes pulse-dot { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .5; transform: scale(.75); } }
+  .refresh-btn { background: none; border: none; cursor: pointer; color: var(--text-muted); font-size: 14px; padding: 2px 4px; transition: color .15s; display: inline-flex; align-items: center; line-height: 1; }
+  .refresh-btn:hover { color: var(--red); }
+  .sub-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 20px; padding: 2px 8px 2px 3px; font-size: 11px; font-weight: 500; color: var(--text-muted); }
+  .sub-chip-dot { width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; color: white; flex-shrink: 0; }
 
   .session-select-wrap { position: relative; }
   .session-select { background: var(--bg-raised); border: 1px solid var(--border-light); border-radius: var(--radius); color: var(--text); font-family: inherit; font-size: 13px; font-weight: 500; padding: 5px 28px 5px 10px; cursor: pointer; outline: none; appearance: none; -webkit-appearance: none; max-width: 200px; }
@@ -796,7 +802,7 @@ function RevealedBanner() {
   return <div className={`revealed-banner ${fading ? "fade-out" : ""}`}>✓ Revealed</div>;
 }
 
-function BoardView({ session, members, questions, currentUser }) {
+function BoardView({ session, members, questions, currentUser, onNewSubmissions }) {
   const sessionId = session?.id;
   const isFacilitator = facilitatorStore.is();
   const allowReactions = session?.allowReactions ?? false;
@@ -811,20 +817,47 @@ function BoardView({ session, members, questions, currentUser }) {
     return seedCards();
   });
 
-  // Presence: real submitted names from localStorage
-  const submittedNames = (() => {
+  // Submitted names — reactive, used by polling refresh
+  const getSubmittedNames = () => {
     try {
       const keys = Object.keys(localStorage).filter(k => k.startsWith("rk_sub_"));
       const names = keys.map(k => JSON.parse(localStorage.getItem(k))).filter(s => s && (s.sessionId === sessionId || s.sprintNumber === session?.sprintNumber)).map(s => s.name).filter(Boolean);
       return [...new Set(names)];
     } catch(e) { console.warn(e); return []; }
-  })();
+  };
+  const [submittedNames, setSubmittedNames] = useState(() => getSubmittedNames());
 
   const [freeCards, setFreeCards] = useState(() => { try { return JSON.parse(localStorage.getItem(`rk_free_${sessionId}`) || "[]"); } catch(e) { console.warn(e); return []; } });
   const [votes, setVotes] = useState(() => { try { return JSON.parse(localStorage.getItem(`rk_votes_${sessionId}`) || "{}"); } catch(e) { console.warn(e); return {}; } });
   const saveVotes = v => { try { localStorage.setItem(`rk_votes_${sessionId}`, JSON.stringify(v)); } catch(e) { console.warn(e); } };
   const handleVote = (cardId, dir) => { setVotes(prev => { const next = { ...prev }; if (!next[cardId]) next[cardId] = {}; if (dir === 0) { delete next[cardId][currentUser]; } else { next[cardId][currentUser] = dir; } saveVotes(next); return next; }); };
   const cardsWithVotes = cards.map(c => ({ ...c, votes: votes[c.id] || {} }));
+
+  // Polling — check for new submissions every 45s
+  const [hasNewSubmissions, setHasNewSubmissions] = useState(false);
+  const knownSubCountRef = useRef(null);
+  const getSubCount = () => {
+    try { return Object.keys(localStorage).filter(k => k.startsWith("rk_sub_")).map(k => JSON.parse(localStorage.getItem(k))).filter(s => s && (s.sessionId === sessionId || s.sprintNumber === session?.sprintNumber)).length; }
+    catch { return 0; }
+  };
+  useEffect(() => {
+    knownSubCountRef.current = getSubCount();
+    const interval = setInterval(() => {
+      const current = getSubCount();
+      if (knownSubCountRef.current !== null && current > knownSubCountRef.current) { setHasNewSubmissions(true); onNewSubmissions?.(); }
+    }, 45000);
+    return () => clearInterval(interval);
+  }, [sessionId]);
+  const handleRefresh = () => {
+    knownSubCountRef.current = getSubCount();
+    setHasNewSubmissions(false);
+    setSubmittedNames(getSubmittedNames());
+    try {
+      const keys = Object.keys(localStorage).filter(k => k.startsWith("rk_sub_"));
+      const subs = keys.map(k => JSON.parse(localStorage.getItem(k))).filter(s => s && (s.sessionId === sessionId || s.sprintNumber === session?.sprintNumber));
+      if (subs.length > 0) setCards(subs.flatMap(sub => Object.entries(sub.answers).filter(([, val]) => val).map(([qId, content]) => ({ id: uid(), qId, content, author: sub.name, color: CARD_COLORS[Math.floor(Math.random() * CARD_COLORS.length)], groupId: null, type: qId === "q1" ? "emoji" : "text" }))));
+    } catch(e) { console.warn(e); }
+  };
 
   const [revealed, setRevealed] = useState(false);
   const [revealKey, setRevealKey] = useState(0); // bump to re-mount RevealedBanner
@@ -835,6 +868,7 @@ function BoardView({ session, members, questions, currentUser }) {
   ]);
   const [newAction, setNewAction] = useState(""); const [newOwner, setNewOwner] = useState("");
   const [showAI, setShowAI] = useState(null); const [groupingCard, setGroupingCard] = useState(null); const [newGroupName, setNewGroupName] = useState("");
+  const [appliedSuggestions, setAppliedSuggestions] = useState([]);
   const [reactions, setReactions] = useState([]);
   const canvasRef = useRef(null); const dragState = useRef(null);
 
@@ -861,19 +895,7 @@ function BoardView({ session, members, questions, currentUser }) {
 
   return (
     <div className="board-wrap">
-      {/* Presence strip — real submitted names */}
-      <div className="presence-strip">
-        <span style={{ marginRight: 6, color: "var(--text-dim)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>📝 Responses submitted by</span>
-        {submittedNames.length === 0
-          ? <span style={{ color: "var(--text-dim)", fontSize: 12 }}>No submissions yet</span>
-          : submittedNames.map((name, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 20, padding: "2px 9px 2px 3px" }}>
-              <div className="presence-avatar" style={{ background: AVATAR_COLORS[i % AVATAR_COLORS.length], width: 20, height: 20, fontSize: 9 }}>{name[0]}</div>
-              <span className="presence-name">{name}</span>
-            </div>
-          ))
-        }
-      </div>
+
 
       {/* Reaction bar — only if enabled */}
       {revealed && allowReactions && (
@@ -885,7 +907,7 @@ function BoardView({ session, members, questions, currentUser }) {
       {reactions.map(r => <div key={r.id} className="reaction-drop" style={{ left: r.x, top: r.y }}>{r.emoji}</div>)}
 
       <div style={{ padding: "16px 20px 24px" }}>
-        {/* Toolbar — Add Card prominent, facilitator tools subdued */}
+        {/* Toolbar */}
         <div className="board-toolbar">
           <button className="btn btn-primary" onClick={addFreeCard} style={{ fontSize: 14, padding: "8px 18px" }}>＋ Add Card</button>
           {isFacilitator && (
@@ -899,6 +921,19 @@ function BoardView({ session, members, questions, currentUser }) {
             </>
           )}
           {isFacilitator && <span className="facilitator-badge">Facilitator</span>}
+          {/* Submitted name chips */}
+          <div style={{ display: "flex", alignItems: "center", gap: 5, marginLeft: "auto", flexWrap: "wrap" }}>
+            {submittedNames.length > 0 && (
+              <span style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginRight: 2 }}>Submitted</span>
+            )}
+            {submittedNames.map((name, i) => (
+              <div key={i} className="sub-chip">
+                <div className="sub-chip-dot" style={{ background: AVATAR_COLORS[i % AVATAR_COLORS.length] }}>{name[0]}</div>
+                {name}
+              </div>
+            ))}
+            {submittedNames.length === 0 && <span style={{ fontSize: 11, color: "var(--text-dim)" }}>No submissions yet</span>}
+          </div>
         </div>
 
         {!revealed && isFacilitator && (
@@ -953,10 +988,21 @@ function BoardView({ session, members, questions, currentUser }) {
                   <div key={item.id} style={{ background: item.done ? "rgba(16,185,129,.05)" : "var(--bg-raised)", border: `1px solid ${item.done ? "rgba(16,185,129,.2)" : "var(--border-light)"}`, borderRadius: 7, padding: "9px 11px", display: "flex", flexDirection: "column", gap: 4 }}>
                     <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                       <div className={`action-check ${item.done ? "done" : ""}`} onClick={() => toggleDone(item.id)} style={{ marginTop: 1 }}>{item.done && "✓"}</div>
-                      <div className={`action-text ${item.done ? "done" : ""}`}>{item.text}</div>
-                      <div style={{ color: "var(--text-dim)", cursor: "pointer", fontSize: 15, transition: "color .15s" }} onClick={() => deleteAction(item.id)} onMouseOver={e => e.currentTarget.style.color = "#f87171"} onMouseOut={e => e.currentTarget.style.color = "var(--text-dim)"}>×</div>
+                      <input
+                        value={item.text}
+                        onChange={e => setActionItems(a => a.map(i => i.id === item.id ? { ...i, text: e.target.value } : i))}
+                        style={{ flex: 1, background: "transparent", border: "none", fontFamily: "inherit", fontSize: 13, color: item.done ? "var(--text-dim)" : "var(--text)", outline: "none", textDecoration: item.done ? "line-through" : "none", minWidth: 0 }}
+                      />
+                      <div style={{ color: "var(--text-dim)", cursor: "pointer", fontSize: 15, transition: "color .15s", flexShrink: 0 }} onClick={() => deleteAction(item.id)} onMouseOver={e => e.currentTarget.style.color = "#f87171"} onMouseOut={e => e.currentTarget.style.color = "var(--text-dim)"}>×</div>
                     </div>
-                    <div style={{ paddingLeft: 26 }}><span className="action-owner">{item.owner}</span></div>
+                    <div style={{ paddingLeft: 26, display: "flex", alignItems: "center", gap: 6 }}>
+                      <input
+                        value={item.owner}
+                        onChange={e => setActionItems(a => a.map(i => i.id === item.id ? { ...i, owner: e.target.value } : i))}
+                        style={{ background: "transparent", border: "none", fontFamily: "inherit", fontSize: 11, color: "var(--blue)", fontWeight: 500, outline: "none", width: 80 }}
+                        placeholder="Owner"
+                      />
+                    </div>
                   </div>
                 ))}
                 {actionItems.length === 0 && <div style={{ textAlign: "center", color: "var(--text-dim)", fontSize: 12, padding: "24px 0" }}>No actions yet</div>}
@@ -976,13 +1022,32 @@ function BoardView({ session, members, questions, currentUser }) {
         {showAI && (
           <div className="modal-overlay" onClick={() => setShowAI(null)}>
             <div className="modal" onClick={e => e.stopPropagation()}>
-              <h2>✨ AI Grouping Suggestions</h2><p>Suggested theme groupings based on card content:</p>
-              {(AI_SUGGESTIONS[showAI] || []).map((s, i) => (
-                <div key={i} className="ai-suggestion"><div className="ai-suggestion-title">📁 {s.label}</div>
-                  {s.cards.map((c, j) => (<div key={j} className="suggestion-item" onClick={() => { const gid = createGroup(showAI, s.label); cards.filter(card => card.qId === showAI && typeof card.content === "string" && card.content.toLowerCase().includes(c.toLowerCase())).forEach(card => applyGroup(card.id, gid)); setShowAI(null); }}><span>·</span><span>Cards mentioning <em>{c}</em></span><span className="suggestion-apply">Apply →</span></div>))}
-                </div>
-              ))}
-              <div className="modal-btns"><button className="btn btn-secondary" onClick={() => setShowAI(null)}>Close</button></div>
+              <h2>✨ AI Grouping Suggestions</h2><p>Apply as many groupings as you like, then close.</p>
+              {(AI_SUGGESTIONS[showAI] || []).map((s, i) => {
+                const applied = appliedSuggestions.includes(s.label);
+                return (
+                  <div key={i} className="ai-suggestion" style={{ opacity: applied ? 0.6 : 1 }}>
+                    <div className="ai-suggestion-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      {applied ? "✓" : "📁"} {s.label}
+                      {applied && <span style={{ fontSize: 10, color: "var(--green)", fontWeight: 600 }}>Applied</span>}
+                    </div>
+                    {s.cards.map((c, j) => (
+                      <div key={j} className="suggestion-item" onClick={() => {
+                        if (applied) return;
+                        const gid = createGroup(showAI, s.label);
+                        cards.filter(card => card.qId === showAI && typeof card.content === "string" && card.content.toLowerCase().includes(c.toLowerCase())).forEach(card => applyGroup(card.id, gid));
+                        setAppliedSuggestions(a => [...a, s.label]);
+                      }}>
+                        <span>·</span><span>Cards mentioning <em>{c}</em></span>
+                        {!applied && <span className="suggestion-apply">Apply →</span>}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+              <div className="modal-btns">
+                <button className="btn btn-secondary" onClick={() => { setShowAI(null); setAppliedSuggestions([]); }}>Done</button>
+              </div>
             </div>
           </div>
         )}
@@ -1139,11 +1204,31 @@ function getTimeOfDay() {
   return { greeting: "Burning the midnight oil?", emoji: "🌙" };
 }
 
-function JoinScreen({ session, onJoin, joined }) {
-  const [name, setName] = useState(""); const [q1Val, setQ1Val] = useState("");
+function JoinScreen({ session, onJoin, joined, savedName }) {
+  const [name, setName] = useState(savedName || ""); const [q1Val, setQ1Val] = useState("");
   const { greeting, emoji } = getTimeOfDay();
   const cutoff = sessionStore.getCutoff(session);
   const dateLabel = session.date ? new Date(session.date + "T12:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "";
+
+  // If name already saved, show a simplified re-join screen
+  if (savedName) {
+    return (
+      <div className="join-wrap">
+        <div className="join-card">
+          <div className="join-logo"><span className="join-logo-dot" />RetroKit</div>
+          <div className="join-sprint">{session.name} · Sprint {session.sprintNumber}</div>
+          <div style={{ fontSize: 40, margin: "16px 0 8px" }}>{emoji}</div>
+          <div className="join-title">Welcome back, {savedName}!</div>
+          <div className="join-sub" style={{ marginBottom: 24 }}>You've already joined this session.</div>
+          <button className="join-btn" onClick={() => onJoin(savedName, "")}>Continue as {savedName} →</button>
+          <button onClick={() => { try { localStorage.removeItem(`rk_name_${session.id}`); } catch(e) {} }} style={{ marginTop: 12, background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer", fontSize: 12, fontFamily: "inherit", display: "block", width: "100%", textAlign: "center" }}>
+            Not {savedName}? Join as someone else
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="join-wrap">
       <div className="join-card">
@@ -1179,6 +1264,7 @@ export default function App() {
   const [view, setView] = useState("submit");
   const [showSettings, setShowSettings] = useState(false);
   const [isFacilitator, setIsFacilitator] = useState(() => facilitatorStore.is());
+  const [hasNewSubmissions, setHasNewSubmissions] = useState(false);
 
   const [activeSession, setActiveSession] = useState(() => {
     const params = new URLSearchParams(window.location.search);
@@ -1187,7 +1273,12 @@ export default function App() {
     return getOrCreateDefaultSession();
   });
 
-  const [currentUser, setCurrentUser] = useState(() => { try { return localStorage.getItem(`rk_name_${activeSession.id}`) || null; } catch(e) { console.warn(e); return null; } });
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem(`rk_name_${activeSession.id}`);
+      return saved || null;
+    } catch(e) { console.warn(e); return null; }
+  });
   const [joined, setJoined] = useState(() => { try { return JSON.parse(localStorage.getItem(`rk_joined_${activeSession.id}`) || "[]"); } catch(e) { console.warn(e); return []; } });
   const [joinQ1, setJoinQ1] = useState("");
 
@@ -1210,7 +1301,8 @@ export default function App() {
   const questions = QUESTIONS(activeSession.sprintNumber, Q3_VARIANTS[activeSession.q3Variant ?? 0]);
   const allSessions = sessionStore.list();
 
-  if (!currentUser) return (<><style>{css}</style><JoinScreen session={activeSession} onJoin={handleJoin} joined={joined} /></>);
+  const savedName = (() => { try { return localStorage.getItem(`rk_name_${activeSession.id}`) || null; } catch { return null; } })();
+  if (!currentUser) return (<><style>{css}</style><JoinScreen session={activeSession} onJoin={handleJoin} joined={joined} savedName={savedName} /></>);
 
   return (
     <>
@@ -1235,8 +1327,14 @@ export default function App() {
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div className="nav-tabs">
               {[["submit", "Submit"], ["board", "Board"], ["history", "Sessions"]].map(([v, label]) => (
-                <button key={v} className={`nav-tab ${view === v ? "active" : ""}`} onClick={() => { try { window.history.replaceState({}, "", window.location.href.split("?")[0]); } catch(e) { console.warn(e); } setView(v); }}>{label}</button>
+                <button key={v} className={`nav-tab ${view === v ? "active" : ""}`} onClick={() => { try { window.history.replaceState({}, "", window.location.href.split("?")[0]); } catch(e) { console.warn(e); } setView(v); }}>
+                  {label}
+                  {v === "board" && hasNewSubmissions && <span className="nav-tab-dot" title="New submissions available" />}
+                </button>
               ))}
+              {hasNewSubmissions && (
+                <button className="refresh-btn" onClick={() => { setHasNewSubmissions(false); setView("board"); }} title="Refresh board — new submissions detected">↻</button>
+              )}
             </div>
             <button className="settings-gear" onClick={() => setShowSettings(true)} title="Settings">⚙️</button>
           </div>
@@ -1245,7 +1343,7 @@ export default function App() {
         <CountdownBar session={activeSession} />
 
         {view === "submit" && <SubmitView session={activeSession} questions={questions} currentUser={currentUser} joinQ1={joinQ1} />}
-        {view === "board" && <BoardView session={activeSession} members={joined} questions={questions} currentUser={currentUser} />}
+        {view === "board" && <BoardView session={activeSession} members={joined} questions={questions} currentUser={currentUser} onNewSubmissions={() => setHasNewSubmissions(true)} />}
         {view === "history" && <HistoryView onLoadSession={handleSwitchSession} />}
 
         {showSettings && <SettingsModal currentSession={activeSession} onSave={handleSaveSettings} onClose={() => { setShowSettings(false); setIsFacilitator(facilitatorStore.is()); }} />}
