@@ -15,7 +15,13 @@ jobs:
         with:
           node-version: 18
       - run: npm install
-      - run: npm run build
+      - name: Build
+          run: npm run build
+          env:
+            REACT_APP_TENOR_KEY: ${{ secrets.REACT_APP_TENOR_KEY }}
+            REACT_APP_GIPHY_KEY: ${{ secrets.REACT_APP_GIPHY_KEY }}
+            REACT_APP_SUPABASE_URL: ${{ secrets.REACT_APP_SUPABASE_URL }}
+            REACT_APP_SUPABASE_ANON_KEY: ${{ secrets.REACT_APP_SUPABASE_ANON_KEY }}
       - uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
