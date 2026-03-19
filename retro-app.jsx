@@ -30,6 +30,7 @@ function uid() { return crypto.randomUUID ? crypto.randomUUID() : Math.random().
 
 const facilitatorStore = {
   set() { try { sessionStorage.setItem("rk_facilitator", "1"); } catch(e) { console.warn(e); } },
+  clear() { try { sessionStorage.removeItem("rk_facilitator"); } catch(e) { console.warn(e); } },
   is() { try { return sessionStorage.getItem("rk_facilitator") === "1"; } catch(e) { return false; } }
 };
 
@@ -57,7 +58,14 @@ const sessionStore = {
       localStorage.setItem("rk_sessions", JSON.stringify(ids.filter(i => i !== id)));
     } catch(e) { console.warn(e); }
   },
-  getSessionUrl(id) { const base = window.location.origin + window.location.pathname.replace(/\?.*$/, ""); return `${base}?session=${id}`; },
+  getSessionUrl(id) {
+    const base = window.location.origin + window.location.pathname.replace(/\?.*$/, "");
+    const s = sessionStore.get(id);
+    if (!s) return `${base}?session=${id}`;
+    // Encode minimal session config so team members can bootstrap in a fresh browser
+    const payload = btoa(JSON.stringify({ id: s.id, name: s.name, sprintNumber: s.sprintNumber, date: s.date, cutoffDate: s.cutoffDate, cutoffTime: s.cutoffTime, q3Variant: s.q3Variant, allowReactions: s.allowReactions, allowVoting: s.allowVoting }));
+    return `${base}?session=${id}&sc=${payload}`;
+  },
   getCutoff(session) {
     if (!session?.cutoffDate || !session?.cutoffTime) return null;
     const dt = new Date(`${session.cutoffDate}T${session.cutoffTime}`);
@@ -1095,107 +1103,187 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
 
 // ── History View ──────────────────────────────────────────────────────────────
 
-function HistoryView({ onLoadSession }) {
-  const sessions = sessionStore.list();
-  return (
-    <div className="history-wrap">
-      <div className="history-title">Sessions</div>
-      {sessions.length === 0 && <div style={{ color: "var(--text-muted)", fontSize: 14 }}>No sessions yet. Create one in Settings.</div>}
-      {sessions.map(s => { const cutoff = sessionStore.getCutoff(s); const open = sessionStore.isSubmissionOpen(s); return (
-        <div key={s.id} className="history-card" onClick={() => onLoadSession(s)}>
-          <div className="history-sprint">{s.name}</div>
-          <div className="history-meta">Sprint {s.sprintNumber}{s.date ? ` · ${s.date}` : ""}{cutoff ? ` · Cutoff ${cutoff.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}</div>
-          <div className="history-stats">
-            <span className="stat-pill">{open ? "🟢 Open" : "🔴 Closed"}</span>
-            <span className="stat-pill">🔗 {sessionStore.getSessionUrl(s.id).split("?")[1]}</span>
-          </div>
-        </div>
-      ); })}
-    </div>
-  );
-}
+
 
 // ── Settings Modal ────────────────────────────────────────────────────────────
 
 const SETTINGS_PASSWORD = "retro2026";
 
 function SettingsModal({ currentSession, onSave, onClose, onReset }) {
-  const [locked, setLocked] = useState(true); const [pw, setPw] = useState(""); const [pwError, setPwError] = useState(false);
+  // Stay unlocked for the whole browser session once password entered
+  const [locked, setLocked] = useState(() => !facilitatorStore.is());
+  const [pw, setPw] = useState(""); const [pwError, setPwError] = useState(false);
   const [sessions, setSessions] = useState(() => sessionStore.list());
-  const [editingId, setEditingId] = useState(currentSession?.id || null);
-  const [form, setForm] = useState(() => { const s = currentSession || {}; return { name: s.name || "", sprintNumber: s.sprintNumber || 1, date: s.date || "", cutoffDate: s.cutoffDate || "", cutoffTime: s.cutoffTime || "", q3Variant: s.q3Variant ?? 0, allowReactions: s.allowReactions ?? false, allowVoting: s.allowVoting ?? false }; });
-  const [saved, setSaved] = useState(false); const [newSessionLink, setNewSessionLink] = useState(null);
+  // "list" = sessions overview, "edit" = create/edit form
+  const [panel, setPanel] = useState("list");
+  const [editingSession, setEditingSession] = useState(null); // null = new
+  const [form, setForm] = useState({ name: "", sprintNumber: 1, date: "", cutoffDate: "", cutoffTime: "", q3Variant: 0, allowReactions: false, allowVoting: false });
+  const [saved, setSaved] = useState(false);
+  const [copiedId, setCopiedId] = useState(null);
 
   const unlock = () => {
     if (pw === SETTINGS_PASSWORD) {
       setLocked(false); setPwError(false);
-      facilitatorStore.set(); // mark this browser as facilitator
+      facilitatorStore.set();
+      if (sessions.length === 0) setPanel("edit"); // go straight to create form if no sessions
     } else setPwError(true);
   };
-  const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
-  const selectSession = s => { setEditingId(s.id); setForm({ name: s.name, sprintNumber: s.sprintNumber, date: s.date || "", cutoffDate: s.cutoffDate || "", cutoffTime: s.cutoffTime || "", q3Variant: s.q3Variant ?? 0, allowReactions: s.allowReactions ?? false, allowVoting: s.allowVoting ?? false }); setNewSessionLink(null); setSaved(false); };
-  const handleNewSession = () => { setEditingId(null); setForm({ name: "", sprintNumber: 1, date: "", cutoffDate: "", cutoffTime: "", q3Variant: 0, allowReactions: false, allowVoting: false }); setNewSessionLink(null); setSaved(false); };
-  const handleSave = () => {
-    const isNew = !editingId;
-    const id = editingId || uid();
-    const session = { id, name: form.name || "Untitled Session", sprintNumber: parseInt(form.sprintNumber) || 1, date: form.date, cutoffDate: form.cutoffDate, cutoffTime: form.cutoffTime, q3Variant: parseInt(form.q3Variant) || 0, allowReactions: form.allowReactions, allowVoting: form.allowVoting };
-    if (isNew) wipeSessionData(id); // fresh slate for new sessions
-    sessionStore.save(session); setSessions(sessionStore.list()); setEditingId(id); setNewSessionLink(sessionStore.getSessionUrl(id)); setSaved(true); onSave(session); setTimeout(() => setSaved(false), 2000);
+
+  const openNew = () => {
+    setEditingSession(null);
+    setForm({ name: "", sprintNumber: 1, date: "", cutoffDate: "", cutoffTime: "", q3Variant: 0, allowReactions: false, allowVoting: false });
+    setSaved(false);
+    setPanel("edit");
   };
-  const handleDelete = (e, id) => { e.stopPropagation(); if (!window.confirm("Delete this session and all its data?")) return; wipeSessionData(id); sessionStore.delete(id); setSessions(sessionStore.list()); if (editingId === id) { setEditingId(null); setForm({ name: "", sprintNumber: 1, date: "", cutoffDate: "", cutoffTime: "", q3Variant: 0, allowReactions: false, allowVoting: false }); } };
+
+  const openEdit = (s, e) => {
+    e.stopPropagation();
+    setEditingSession(s);
+    setForm({ name: s.name, sprintNumber: s.sprintNumber, date: s.date || "", cutoffDate: s.cutoffDate || "", cutoffTime: s.cutoffTime || "", q3Variant: s.q3Variant ?? 0, allowReactions: s.allowReactions ?? false, allowVoting: s.allowVoting ?? false });
+    setSaved(false);
+    setPanel("edit");
+  };
+
+  const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
+
+  const handleSave = () => {
+    const isNew = !editingSession;
+    const id = editingSession?.id || uid();
+    const session = { id, name: form.name || "Untitled Session", sprintNumber: parseInt(form.sprintNumber) || 1, date: form.date, cutoffDate: form.cutoffDate, cutoffTime: form.cutoffTime, q3Variant: parseInt(form.q3Variant) || 0, allowReactions: form.allowReactions, allowVoting: form.allowVoting };
+    if (isNew) wipeSessionData(id);
+    sessionStore.save(session);
+    setSessions(sessionStore.list());
+    setSaved(true);
+    onSave(session);
+    // After save, go back to list
+    setTimeout(() => { setSaved(false); setPanel("list"); }, 900);
+  };
+
+  const handleDelete = (id, e) => {
+    e.stopPropagation();
+    if (!window.confirm("Delete this session and all its data?")) return;
+    wipeSessionData(id); sessionStore.delete(id);
+    setSessions(sessionStore.list());
+    if (editingSession?.id === id) setPanel("list");
+  };
+
+  const copyLink = (s, e) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(sessionStore.getSessionUrl(s.id)).catch(() => {});
+    setCopiedId(s.id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const canClose = sessions.length > 0; // can't close with zero sessions
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 540 }} onClick={e => e.stopPropagation()}>
+    <div className="modal-overlay" onClick={canClose ? onClose : undefined}>
+      <div className="modal" style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()}>
+
+        {/* ── Lock screen ── */}
         {locked ? (
           <div className="settings-lock">
-            <div className="settings-lock-icon">⚙️</div><h2>Settings</h2><p>Enter the facilitator password to make changes.</p>
-            <div className="settings-pw-row"><input className="settings-pw-input" type="password" placeholder="Password" value={pw} onChange={e => { setPw(e.target.value); setPwError(false); }} onKeyDown={e => e.key === "Enter" && unlock()} autoFocus /><button className="btn btn-primary" onClick={unlock}>Unlock</button></div>
+            <div className="settings-lock-icon">⚙️</div>
+            <h2>Settings</h2>
+            <p>Enter the facilitator password to continue.</p>
+            <div className="settings-pw-row">
+              <input className="settings-pw-input" type="password" placeholder="Password" value={pw}
+                onChange={e => { setPw(e.target.value); setPwError(false); }}
+                onKeyDown={e => e.key === "Enter" && unlock()} autoFocus />
+              <button className="btn btn-primary" onClick={unlock}>Unlock</button>
+            </div>
             {pwError && <div className="settings-pw-error">Incorrect password</div>}
-            <div className="modal-btns" style={{ justifyContent: "center", marginTop: 14 }}><button className="btn btn-secondary" onClick={onClose}>Cancel</button></div>
+            {canClose && <div className="modal-btns" style={{ justifyContent: "center", marginTop: 14 }}><button className="btn btn-secondary" onClick={onClose}>Cancel</button></div>}
           </div>
+
+        /* ── Sessions list ── */
+        ) : panel === "list" ? (
+          <>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+              <h2 style={{ marginBottom: 0 }}>Sessions</h2>
+              <button className="btn btn-primary" onClick={openNew}>＋ New Session</button>
+            </div>
+
+            {sessions.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "32px 0 24px" }}>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>📋</div>
+                <div style={{ fontWeight: 600, color: "var(--text)", fontSize: 16, marginBottom: 6 }}>No sessions yet</div>
+                <div style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 24 }}>Create your first retro session to get started.</div>
+                <button className="btn btn-primary" onClick={openNew} style={{ padding: "10px 24px", fontSize: 14 }}>Create your first session →</button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+                {sessions.map(s => {
+                  const open = sessionStore.isSubmissionOpen(s);
+                  const cutoff = sessionStore.getCutoff(s);
+                  const url = sessionStore.getSessionUrl(s.id);
+                  return (
+                    <div key={s.id} style={{ background: "var(--bg-raised)", border: `1px solid ${currentSession?.id === s.id ? "var(--red)" : "var(--border-light)"}`, borderRadius: 10, padding: "14px 16px" }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: 14, color: "var(--text)", marginBottom: 3 }}>{s.name}</div>
+                          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                            Sprint {s.sprintNumber}{s.date ? ` · ${s.date}` : ""}
+                            {cutoff ? ` · closes ${cutoff.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
+                          </div>
+                          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                            <span style={{ fontSize: 11, fontWeight: 600, color: open ? "#34d399" : "var(--text-dim)", background: open ? "rgba(52,211,153,.1)" : "var(--bg-input)", border: `1px solid ${open ? "rgba(52,211,153,.25)" : "var(--border)"}`, borderRadius: 20, padding: "1px 8px" }}>{open ? "🟢 Open" : "🔴 Closed"}</span>
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                          <button className="btn btn-secondary" style={{ padding: "5px 10px", fontSize: 12 }}
+                            onClick={e => copyLink(s, e)}>
+                            {copiedId === s.id ? "✓ Copied" : "Copy link"}
+                          </button>
+                          <button className="btn btn-secondary" style={{ padding: "5px 10px", fontSize: 12 }}
+                            onClick={e => openEdit(s, e)} title="Edit session">✎</button>
+                          <button className="btn btn-danger" style={{ padding: "5px 10px", fontSize: 12 }}
+                            onClick={e => handleDelete(s.id, e)} title="Delete session">🗑</button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <button className="btn btn-danger" style={{ fontSize: 11 }} onClick={() => {
+                if (!window.confirm("Delete ALL sessions, submissions, and board data?")) return;
+                wipeAllData(); setSessions([]); onReset();
+              }}>⚠ Reset all data</button>
+              {canClose && <button className="btn btn-secondary" onClick={onClose}>Close</button>}
+            </div>
+          </>
+
+        /* ── Edit / Create form ── */
         ) : (
           <>
-            <h2>Settings</h2><p>Manage sessions and configure options.</p>
-            <div className="settings-section">
-              <div className="settings-section-title">Sessions</div>
-              <div className="session-list">
-                {sessions.map(s => (
-                  <div key={s.id} className={`session-list-item ${editingId === s.id ? "active" : ""}`} onClick={() => selectSession(s)}>
-                    <div style={{ flex: 1 }}>
-                      <div className="session-list-item-name">{s.name}</div>
-                      <div className="session-list-item-meta">Sprint {s.sprintNumber}{s.date ? ` · ${s.date}` : ""}{s.cutoffTime ? ` · cutoff ${s.cutoffTime}` : ""} · {sessionStore.isSubmissionOpen(s) ? "🟢 Open" : "🔴 Closed"}</div>
-                    </div>
-                    <span className="session-list-item-del" onClick={e => handleDelete(e, s.id)}>🗑</span>
-                  </div>
-                ))}
-              </div>
-              {sessions.length === 0 && (
-                <div style={{ textAlign: "center", padding: "20px 0 12px", color: "var(--text-muted)", fontSize: 13 }}>
-                  <div style={{ fontSize: 32, marginBottom: 8 }}>📋</div>
-                  <div style={{ fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>No sessions yet</div>
-                  <div style={{ fontSize: 12, marginBottom: 16 }}>Create your first session to get started.</div>
-                </div>
-              )}
-              <button className="btn btn-primary" onClick={handleNewSession} style={{ width: "100%", justifyContent: "center" }}>＋ {sessions.length === 0 ? "Create your first session" : "New Session"}</button>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+              <button className="btn btn-ghost" style={{ padding: "4px 8px", fontSize: 16 }} onClick={() => setPanel("list")}>←</button>
+              <h2 style={{ marginBottom: 0 }}>{editingSession ? "Edit Session" : "New Session"}</h2>
             </div>
 
             <div className="settings-section">
-              <div className="settings-section-title">{editingId ? "Edit Session" : "New Session"}</div>
-              <div className="settings-row"><label className="label">Session name</label><input className="input" placeholder="e.g. Flex1 Sprint 16, MetaCon Retro" value={form.name} onChange={e => set("name", e.target.value)} /></div>
+              <div className="settings-row"><label className="label">Session name</label><input className="input" placeholder="e.g. Flex1 Sprint 16, MetaCon Retro" value={form.name} onChange={e => set("name", e.target.value)} autoFocus /></div>
               <div style={{ display: "flex", gap: 10 }}>
                 <div className="settings-row" style={{ flex: 1 }}><label className="label">Sprint #</label><input className="input" type="number" min="1" value={form.sprintNumber} onChange={e => set("sprintNumber", e.target.value)} /></div>
                 <div className="settings-row" style={{ flex: 2 }}><label className="label">Retro date</label><input className="input" type="date" value={form.date} onChange={e => set("date", e.target.value)} /></div>
               </div>
-              <div className="settings-section-title" style={{ marginTop: 6 }}>Submission Cutoff</div>
-              <div className="settings-hint" style={{ marginBottom: 8 }}>The countdown timer counts down to this time. Set it a few minutes before the retro starts.</div>
+            </div>
+
+            <div className="settings-section">
+              <div className="settings-section-title">Submission Cutoff</div>
+              <div className="settings-hint" style={{ marginBottom: 10 }}>Countdown timer counts down to this. Set a few minutes before the retro starts.</div>
               <div style={{ display: "flex", gap: 10 }}>
                 <div className="settings-row" style={{ flex: 2 }}><label className="label">Date</label><input className="input" type="date" value={form.cutoffDate} onChange={e => set("cutoffDate", e.target.value)} /></div>
                 <div className="settings-row" style={{ flex: 1 }}><label className="label">Time</label><input className="input" type="time" value={form.cutoffTime} onChange={e => set("cutoffTime", e.target.value)} /></div>
               </div>
               <div className="settings-row"><label className="label">Q3 variant</label><select className="select" value={form.q3Variant} onChange={e => set("q3Variant", e.target.value)}>{Q3_VARIANTS.map((q, i) => <option key={i} value={i}>{q}</option>)}</select></div>
+            </div>
 
-              <div className="settings-section-title" style={{ marginTop: 6 }}>Board Features</div>
+            <div className="settings-section">
+              <div className="settings-section-title">Board Features</div>
               <div className="toggle-row">
                 <div><div className="toggle-label">Allow reactions</div><div className="toggle-hint">Floating emoji reactions on the board</div></div>
                 <label className="toggle"><input type="checkbox" checked={form.allowReactions} onChange={e => set("allowReactions", e.target.checked)} /><span className="toggle-slider" /></label>
@@ -1206,26 +1294,12 @@ function SettingsModal({ currentSession, onSave, onClose, onReset }) {
               </div>
             </div>
 
-            {newSessionLink && (
-              <div className="session-link-box">
-                <h3>🔗 Session Link</h3><p>Share this with your team. Submissions close at the cutoff time you set.</p>
-                <div className="edit-link-copy-row"><div className="edit-link-url" title={newSessionLink}>{newSessionLink}</div><CopyButton text={newSessionLink} /></div>
-              </div>
-            )}
-            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 16, marginTop: 4 }}>
-              <button className="btn btn-danger" style={{ fontSize: 12 }} onClick={() => {
-                if (!window.confirm("This will delete ALL sessions, submissions, and board data. Are you sure?")) return;
-                wipeAllData();
-                setSessions([]);
-                setEditingId(null);
-                setForm({ name: "", sprintNumber: 1, date: "", cutoffDate: "", cutoffTime: "", q3Variant: 0, allowReactions: false, allowVoting: false });
-                setNewSessionLink(null);
-                onReset();
-              }}>⚠ Reset all data</button>
-            </div>
             <div className="modal-btns">
-              <button className="btn btn-secondary" onClick={onClose}>Close</button>
-              {saved ? <span className="settings-saved">✓ Saved!</span> : <button className="btn btn-primary" onClick={handleSave}>{editingId ? "Save Changes" : "Create Session →"}</button>}
+              <button className="btn btn-secondary" onClick={() => setPanel("list")}>Cancel</button>
+              {saved
+                ? <span className="settings-saved">✓ Saved!</span>
+                : <button className="btn btn-primary" onClick={handleSave}>{editingSession ? "Save Changes" : "Create Session →"}</button>
+              }
             </div>
           </>
         )}
@@ -1312,8 +1386,21 @@ export default function App() {
   const [activeSession, setActiveSession] = useState(() => {
     const params = new URLSearchParams(window.location.search);
     const sid = params.get("session");
-    if (sid) { const s = sessionStore.get(sid); if (s) return s; }
-    // No URL session — use most recent saved session if any
+    if (sid) {
+      // Try local storage first
+      const local = sessionStore.get(sid);
+      if (local) return local;
+      // Try embedded config in URL (for team members in fresh browsers)
+      const sc = params.get("sc");
+      if (sc) {
+        try {
+          const session = JSON.parse(atob(sc));
+          sessionStore.save(session); // cache locally for future visits
+          return session;
+        } catch(e) { console.warn("Failed to decode session config", e); }
+      }
+      return null; // session not found
+    }
     const sessions = sessionStore.list();
     return sessions.length > 0 ? sessions[sessions.length - 1] : null;
   });
@@ -1387,14 +1474,14 @@ export default function App() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div className="nav-tabs">
-              {[["submit", "Submit"], ["board", "Board"], ["history", "Sessions"]].map(([v, label]) => (
+              {[["submit", "Submit"], ["board", "Board"]].map(([v, label]) => (
                 <button key={v} className={`nav-tab ${view === v ? "active" : ""}`} onClick={() => { try { window.history.replaceState({}, "", window.location.href.split("?")[0]); } catch(e) { console.warn(e); } setView(v); }}>
                   {label}
                   {v === "board" && hasNewSubmissions && <span className="nav-tab-dot" title="New submissions available" />}
                 </button>
               ))}
               {hasNewSubmissions && (
-                <button className="refresh-btn" onClick={() => { setHasNewSubmissions(false); setView("board"); }} title="Refresh board — new submissions detected">↻</button>
+                <button className="refresh-btn" onClick={() => { setHasNewSubmissions(false); setView("board"); }} title="Refresh board">↻</button>
               )}
             </div>
             <button className="settings-gear" onClick={() => setShowSettings(true)} title="Settings">⚙️</button>
@@ -1405,7 +1492,7 @@ export default function App() {
 
         {view === "submit" && <SubmitView session={activeSession} questions={questions} currentUser={currentUser} joinQ1={joinQ1} />}
         {view === "board" && <BoardView session={activeSession} members={joined} questions={questions} currentUser={currentUser} onNewSubmissions={() => setHasNewSubmissions(true)} />}
-        {view === "history" && <HistoryView onLoadSession={handleSwitchSession} />}
+
 
         {showSettings && <SettingsModal currentSession={activeSession} onSave={handleSaveSettings} onClose={() => { setShowSettings(false); setIsFacilitator(facilitatorStore.is()); }} onReset={() => { wipeAllData(); setActiveSession(null); setCurrentUser(null); setShowSettings(false); }} />}
       </div>
