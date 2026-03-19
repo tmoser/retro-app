@@ -1,4 +1,9 @@
 import { useState, useEffect, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL || "";
+const SUPABASE_ANON_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY || "";
+const supabase = SUPABASE_URL && SUPABASE_ANON_KEY ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
 // ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -635,8 +640,17 @@ function AIIdeas({ question, onSelect }) {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const submissionsStore = {
-  get(token) { try { return JSON.parse(localStorage.getItem("rk_sub_" + token) || "null"); } catch(e) { console.warn(e); return null; } },
-  set(token, data) { try { localStorage.setItem("rk_sub_" + token, JSON.stringify(data)); } catch(e) { console.warn(e); } }
+  async save(token, data) {
+    try { localStorage.setItem("rk_sub_" + token, JSON.stringify(data)); } catch(e) { console.warn(e); }
+    if (supabase) {
+      const { error } = await supabase.from("submissions").upsert({
+        id: token, session_id: data.sessionId, name: data.name,
+        answers: data.answers, submitted_at: data.submittedAt
+      });
+      if (error) console.warn("Supabase submission save:", error.message);
+    }
+  },
+  get(token) { try { return JSON.parse(localStorage.getItem("rk_sub_" + token) || "null"); } catch(e) { console.warn(e); return null; } }
 };
 function generateEditToken() { return uid(); }
 
@@ -730,7 +744,11 @@ function SubmitView({ session, questions, currentUser, joinQ1 }) {
   if (exited) return <div className="submit-wrap"><div className="success-wrap"><div className="success-icon">👋</div><h2>No changes made</h2><p>Your original responses are still saved.</p></div></div>;
   const setAnswer = (id, val) => setAnswers(a => ({ ...a, [id]: val }));
   const injectIdea = (qId, text) => { setAnswer(qId, text); setInjected(i => ({ ...i, [qId]: text })); };
-  const handleSubmit = () => { const token = editToken || generateEditToken(); submissionsStore.set(token, { name: name.trim(), answers, sprintNumber: session.sprintNumber, sessionId: session.id, submittedAt: new Date().toISOString() }); setEditLink({ token }); setSubmitted(true); setShowConfirm(false); };
+  const handleSubmit = async () => {
+    const token = editToken || generateEditToken();
+    await submissionsStore.save(token, { name: name.trim(), answers, sprintNumber: session.sprintNumber, sessionId: session.id, submittedAt: new Date().toISOString() });
+    setEditLink({ token }); setSubmitted(true); setShowConfirm(false);
+  };
   if (submitted) return <div className="submit-wrap"><div className="success-wrap"><div className="success-icon">{isEditing ? "✏️" : "🎉"}</div><h2>{isEditing ? "Responses updated!" : "You're all set!"}</h2><p>Your responses have been saved. See you at the retro!</p>{editLink && <EditLinkBox token={editLink.token} />}</div></div>;
   return (
     <div className="submit-wrap">
@@ -836,77 +854,154 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
   const allowReactions = session?.allowReactions ?? false;
   const allowVoting = session?.allowVoting ?? false;
 
-  const [cards, setCards] = useState(() => {
-    try {
-      const keys = Object.keys(localStorage).filter(k => k.startsWith("rk_sub_"));
-      const subs = keys.map(k => JSON.parse(localStorage.getItem(k))).filter(s => s && (s.sessionId === sessionId || s.sprintNumber === session?.sprintNumber));
-      if (subs.length > 0) return subs.flatMap(sub => Object.entries(sub.answers).filter(([, val]) => val).map(([qId, content]) => ({ id: uid(), qId, content, author: sub.name, color: CARD_COLORS[Math.floor(Math.random() * CARD_COLORS.length)], groupId: null, type: qId === "q1" ? "emoji" : "text" })));
-    } catch(e) { console.warn(e); }
-    return []; // empty until real submissions arrive
-  });
+  const [cards, setCards] = useState([]);
+  const [submittedNames, setSubmittedNames] = useState([]);
+  const [freeCards, setFreeCards] = useState([]);
+  const [votes, setVotes] = useState({});
+  const [actionItemsLoaded, setActionItemsLoaded] = useState(false);
+  const [hasNewSubmissions, setHasNewSubmissions] = useState(false);
 
-  // Submitted names — reactive, used by polling refresh
-  const getSubmittedNames = () => {
-    try {
-      const keys = Object.keys(localStorage).filter(k => k.startsWith("rk_sub_"));
-      const names = keys.map(k => JSON.parse(localStorage.getItem(k))).filter(s => s && (s.sessionId === sessionId || s.sprintNumber === session?.sprintNumber)).map(s => s.name).filter(Boolean);
-      return [...new Set(names)];
-    } catch(e) { console.warn(e); return []; }
-  };
-  const [submittedNames, setSubmittedNames] = useState(() => getSubmittedNames());
+  // Helper: map a submission row to card objects
+  const subToCards = sub => Object.entries(sub.answers || {}).filter(([, val]) => val).map(([qId, content]) => ({
+    id: uid(), qId, content, author: sub.name,
+    color: CARD_COLORS[Math.floor(Math.random() * CARD_COLORS.length)],
+    groupId: null, type: qId === "q1" ? "emoji" : "text"
+  }));
 
-  const [freeCards, setFreeCards] = useState(() => { try { return JSON.parse(localStorage.getItem(`rk_free_${sessionId}`) || "[]"); } catch(e) { console.warn(e); return []; } });
-  const [votes, setVotes] = useState(() => { try { return JSON.parse(localStorage.getItem(`rk_votes_${sessionId}`) || "{}"); } catch(e) { console.warn(e); return {}; } });
-  const saveVotes = v => { try { localStorage.setItem(`rk_votes_${sessionId}`, JSON.stringify(v)); } catch(e) { console.warn(e); } };
-  const handleVote = (cardId, dir) => { setVotes(prev => { const next = { ...prev }; if (!next[cardId]) next[cardId] = {}; if (dir === 0) { delete next[cardId][currentUser]; } else { next[cardId][currentUser] = dir; } saveVotes(next); return next; }); };
+  // Load submissions from Supabase on mount
+  useEffect(() => {
+    if (!sessionId) return;
+    if (supabase) {
+      supabase.from("submissions").select("*").eq("session_id", sessionId)
+        .then(({ data, error }) => {
+          if (error) { console.warn("load submissions:", error.message); return; }
+          if (data?.length) {
+            setCards(data.flatMap(subToCards));
+            setSubmittedNames([...new Set(data.map(s => s.name).filter(Boolean))]);
+          }
+        });
+      // Load free cards
+      supabase.from("free_cards").select("*").eq("session_id", sessionId)
+        .then(({ data, error }) => {
+          if (error) { console.warn("load free_cards:", error.message); return; }
+          if (data) setFreeCards(data.map(r => ({ id: r.id, content: r.content, author: r.author, color: r.color, x: r.x, y: r.y })));
+        });
+      // Load votes
+      supabase.from("votes").select("*").eq("session_id", sessionId)
+        .then(({ data, error }) => {
+          if (error) { console.warn("load votes:", error.message); return; }
+          if (data) {
+            const v = {};
+            data.forEach(row => { if (!v[row.card_id]) v[row.card_id] = {}; v[row.card_id][row.user_name] = row.direction; });
+            setVotes(v);
+          }
+        });
+      // Load action items
+      supabase.from("action_items").select("*").eq("session_id", sessionId).order("created_at")
+        .then(({ data, error }) => {
+          if (error) { console.warn("load action_items:", error.message); return; }
+          if (data?.length) { setActionItems(data.map(r => ({ id: r.id, text: r.text, owner: r.owner, done: r.done }))); }
+          setActionItemsLoaded(true);
+        });
+
+      // Real-time subscription for new submissions
+      const channel = supabase.channel(`session-${sessionId}`)
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "submissions", filter: `session_id=eq.${sessionId}` },
+          payload => {
+            const newSub = payload.new;
+            setCards(prev => [...prev, ...subToCards(newSub)]);
+            setSubmittedNames(prev => [...new Set([...prev, newSub.name])]);
+            setHasNewSubmissions(true);
+            onNewSubmissions?.();
+          }
+        )
+        .subscribe();
+      return () => supabase.removeChannel(channel);
+    } else {
+      // localStorage fallback (same browser only)
+      try {
+        const keys = Object.keys(localStorage).filter(k => k.startsWith("rk_sub_"));
+        const subs = keys.map(k => JSON.parse(localStorage.getItem(k))).filter(s => s?.sessionId === sessionId);
+        if (subs.length) {
+          setCards(subs.flatMap(subToCards));
+          setSubmittedNames([...new Set(subs.map(s => s.name).filter(Boolean))]);
+        }
+      } catch(e) { console.warn(e); }
+      setActionItemsLoaded(true);
+    }
+  }, [sessionId]);
+
   const cardsWithVotes = cards.map(c => ({ ...c, votes: votes[c.id] || {} }));
 
-  // Polling — check for new submissions every 45s
-  const [hasNewSubmissions, setHasNewSubmissions] = useState(false);
-  const knownSubCountRef = useRef(null);
-  const getSubCount = () => {
-    try { return Object.keys(localStorage).filter(k => k.startsWith("rk_sub_")).map(k => JSON.parse(localStorage.getItem(k))).filter(s => s && (s.sessionId === sessionId || s.sprintNumber === session?.sprintNumber)).length; }
-    catch { return 0; }
+  // Votes handler — write to Supabase
+  const handleVote = async (cardId, dir) => {
+    const voteId = `${sessionId}_${cardId}_${currentUser}`;
+    if (dir === 0) {
+      setVotes(prev => { const next = { ...prev }; if (next[cardId]) { delete next[cardId][currentUser]; } return next; });
+      if (supabase) await supabase.from("votes").delete().eq("id", voteId);
+    } else {
+      setVotes(prev => { const next = { ...prev }; if (!next[cardId]) next[cardId] = {}; next[cardId][currentUser] = dir; return next; });
+      if (supabase) await supabase.from("votes").upsert({ id: voteId, session_id: sessionId, card_id: cardId, user_name: currentUser, direction: dir });
+    }
   };
-  useEffect(() => {
-    knownSubCountRef.current = getSubCount();
-    const interval = setInterval(() => {
-      const current = getSubCount();
-      if (knownSubCountRef.current !== null && current > knownSubCountRef.current) { setHasNewSubmissions(true); onNewSubmissions?.(); }
-    }, 45000);
-    return () => clearInterval(interval);
-  }, [sessionId]);
-  const handleRefresh = () => {
-    knownSubCountRef.current = getSubCount();
-    setHasNewSubmissions(false);
-    setSubmittedNames(getSubmittedNames());
-    try {
-      const keys = Object.keys(localStorage).filter(k => k.startsWith("rk_sub_"));
-      const subs = keys.map(k => JSON.parse(localStorage.getItem(k))).filter(s => s && (s.sessionId === sessionId || s.sprintNumber === session?.sprintNumber));
-      if (subs.length > 0) setCards(subs.flatMap(sub => Object.entries(sub.answers).filter(([, val]) => val).map(([qId, content]) => ({ id: uid(), qId, content, author: sub.name, color: CARD_COLORS[Math.floor(Math.random() * CARD_COLORS.length)], groupId: null, type: qId === "q1" ? "emoji" : "text" }))));
-    } catch(e) { console.warn(e); }
-  };
+
+  const handleRefresh = () => { setHasNewSubmissions(false); };
 
   const [revealed, setRevealed] = useState(false);
   const [revealKey, setRevealKey] = useState(0); // bump to re-mount RevealedBanner
   const [groups, setGroups] = useState({});
-  const [actionItems, setActionItems] = useState([
-    { id: uid(), text: "Set up async design review process", owner: "Sam", done: false },
-    { id: uid(), text: "Add ticket grooming to sprint planning agenda", owner: "Riley", done: false },
-  ]);
+  const [actionItems, setActionItems] = useState([]);
   const [newAction, setNewAction] = useState(""); const [newOwner, setNewOwner] = useState("");
   const [showAI, setShowAI] = useState(null); const [groupingCard, setGroupingCard] = useState(null); const [newGroupName, setNewGroupName] = useState("");
   const [appliedSuggestions, setAppliedSuggestions] = useState([]);
   const [reactions, setReactions] = useState([]);
   const canvasRef = useRef(null); const dragState = useRef(null);
 
-  const saveFreeCards = c => { try { localStorage.setItem(`rk_free_${sessionId}`, JSON.stringify(c)); } catch(e) { console.warn(e); } };
-  const addFreeCard = () => { const canvas = canvasRef.current; const rect = canvas ? canvas.getBoundingClientRect() : { width: 800, height: 600 }; const x = Math.max(0, Math.round(rect.width / 2 - 100)); const y = Math.max(0, Math.round(window.scrollY + window.innerHeight / 2 - 100)); const newCard = { id: uid(), content: "", author: currentUser || "You", color: randomColor(), x, y }; const updated = [...freeCards, newCard]; setFreeCards(updated); saveFreeCards(updated); };
+  const saveFreeCard = async (card) => {
+    if (supabase) {
+      const { error } = await supabase.from("free_cards").upsert({ id: card.id, session_id: sessionId, content: card.content, author: card.author, color: card.color, x: card.x, y: card.y });
+      if (error) console.warn("save free_card:", error.message);
+    }
+  };
+  const deleteFreeCardRemote = async (cardId) => {
+    if (supabase) await supabase.from("free_cards").delete().eq("id", cardId);
+  };
+
+  const addFreeCard = () => {
+    const canvas = canvasRef.current;
+    const rect = canvas ? canvas.getBoundingClientRect() : { width: 800, height: 600 };
+    const x = Math.max(0, Math.round(rect.width / 2 - 100));
+    const y = Math.max(0, Math.round(window.scrollY + window.innerHeight / 2 - 100));
+    const newCard = { id: uid(), content: "", author: currentUser || "You", color: randomColor(), x, y };
+    setFreeCards(prev => [...prev, newCard]);
+    saveFreeCard(newCard);
+  };
   const handleDragStart = (e, cardId) => { const card = freeCards.find(c => c.id === cardId); if (!card) return; dragState.current = { cardId, startX: e.clientX, startY: e.clientY, origX: card.x, origY: card.y }; window.addEventListener("mousemove", handleDragMove); window.addEventListener("mouseup", handleDragEnd); };
   const handleDragMove = e => { const d = dragState.current; if (!d) return; const dx = e.clientX - d.startX, dy = e.clientY - d.startY; setFreeCards(cs => cs.map(c => c.id === d.cardId ? { ...c, x: Math.max(0, d.origX + dx), y: Math.max(0, d.origY + dy) } : c)); };
-  const handleDragEnd = () => { if (!dragState.current) return; setFreeCards(cs => { saveFreeCards(cs); return cs; }); dragState.current = null; window.removeEventListener("mousemove", handleDragMove); window.removeEventListener("mouseup", handleDragEnd); };
-  const handleEditCard = (cardId, newText) => { setFreeCards(cs => { const updated = cs.map(c => c.id === cardId ? { ...c, content: newText } : c); saveFreeCards(updated); return updated; }); };
-  const handleDeleteCard = (cardId) => { setFreeCards(cs => { const updated = cs.filter(c => c.id !== cardId); saveFreeCards(updated); return updated; }); };
+  const handleDragEnd = () => {
+    if (!dragState.current) return;
+    const d = dragState.current;
+    setFreeCards(cs => {
+      const card = cs.find(c => c.id === d.cardId);
+      if (card) saveFreeCard(card);
+      return cs;
+    });
+    dragState.current = null;
+    window.removeEventListener("mousemove", handleDragMove);
+    window.removeEventListener("mouseup", handleDragEnd);
+  };
+  const handleEditCard = (cardId, newText) => {
+    setFreeCards(cs => {
+      const updated = cs.map(c => c.id === cardId ? { ...c, content: newText } : c);
+      const card = updated.find(c => c.id === cardId);
+      if (card) saveFreeCard(card);
+      return updated;
+    });
+  };
+  const handleDeleteCard = (cardId) => {
+    setFreeCards(cs => cs.filter(c => c.id !== cardId));
+    deleteFreeCardRemote(cardId);
+  };
   useEffect(() => () => { window.removeEventListener("mousemove", handleDragMove); window.removeEventListener("mouseup", handleDragEnd); }, []);
 
   const dropReaction = emoji => { const id = uid(); const x = 100 + Math.random() * (window.innerWidth - 200); const y = 100 + Math.random() * (window.innerHeight - 200); setReactions(r => [...r, { id, emoji, x, y }]); setTimeout(() => setReactions(r => r.filter(rx => rx.id !== id)), 2400); };
@@ -915,9 +1010,35 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
   const applyGroup = (cardId, groupId) => setCards(cs => cs.map(c => c.id === cardId ? { ...c, groupId } : c));
   const createGroup = (qId, name) => { const gid = uid(); setGroups(g => ({ ...g, [gid]: { name, qId } })); return gid; };
   const groupsForQ = qId => Object.entries(groups).filter(([, v]) => v.qId === qId);
-  const toggleDone = id => setActionItems(a => a.map(i => i.id === id ? { ...i, done: !i.done } : i));
-  const deleteAction = id => setActionItems(a => a.filter(i => i.id !== id));
-  const addAction = () => { if (!newAction.trim()) return; setActionItems(a => [...a, { id: uid(), text: newAction, owner: newOwner || "TBD", done: false }]); setNewAction(""); setNewOwner(""); };
+  const toggleDone = async (id) => {
+    const item = actionItems.find(i => i.id === id);
+    if (!item) return;
+    const newDone = !item.done;
+    setActionItems(a => a.map(i => i.id === id ? { ...i, done: newDone } : i));
+    if (supabase) await supabase.from("action_items").update({ done: newDone }).eq("id", id);
+  };
+  const deleteAction = async (id) => {
+    setActionItems(a => a.filter(i => i.id !== id));
+    if (supabase) await supabase.from("action_items").delete().eq("id", id);
+  };
+  const addAction = async () => {
+    if (!newAction.trim()) return;
+    const item = { id: uid(), text: newAction, owner: newOwner || "TBD", done: false };
+    setActionItems(a => [...a, item]);
+    setNewAction(""); setNewOwner("");
+    if (supabase) {
+      const { error } = await supabase.from("action_items").insert({ ...item, session_id: sessionId });
+      if (error) console.warn("add action_item:", error.message);
+    }
+  };
+  const editActionText = async (id, text) => {
+    setActionItems(a => a.map(i => i.id === id ? { ...i, text } : i));
+    if (supabase) await supabase.from("action_items").update({ text }).eq("id", id);
+  };
+  const editActionOwner = async (id, owner) => {
+    setActionItems(a => a.map(i => i.id === id ? { ...i, owner } : i));
+    if (supabase) await supabase.from("action_items").update({ owner }).eq("id", id);
+  };
 
   const handleReveal = () => { setRevealed(true); setRevealKey(k => k + 1); };
 
@@ -1018,7 +1139,7 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
                       <div className={`action-check ${item.done ? "done" : ""}`} onClick={() => toggleDone(item.id)} style={{ marginTop: 1 }}>{item.done && "✓"}</div>
                       <input
                         value={item.text}
-                        onChange={e => setActionItems(a => a.map(i => i.id === item.id ? { ...i, text: e.target.value } : i))}
+                        onChange={e => editActionText(item.id, e.target.value)}
                         style={{ flex: 1, background: "transparent", border: "none", fontFamily: "inherit", fontSize: 13, color: item.done ? "var(--text-dim)" : "var(--text)", outline: "none", textDecoration: item.done ? "line-through" : "none", minWidth: 0 }}
                       />
                       <div style={{ color: "var(--text-dim)", cursor: "pointer", fontSize: 15, transition: "color .15s", flexShrink: 0 }} onClick={() => deleteAction(item.id)} onMouseOver={e => e.currentTarget.style.color = "#f87171"} onMouseOut={e => e.currentTarget.style.color = "var(--text-dim)"}>×</div>
@@ -1026,7 +1147,7 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
                     <div style={{ paddingLeft: 26, display: "flex", alignItems: "center", gap: 6 }}>
                       <input
                         value={item.owner}
-                        onChange={e => setActionItems(a => a.map(i => i.id === item.id ? { ...i, owner: e.target.value } : i))}
+                        onChange={e => editActionOwner(item.id, e.target.value)}
                         style={{ background: "transparent", border: "none", fontFamily: "inherit", fontSize: 11, color: "var(--blue)", fontWeight: 500, outline: "none", width: 80 }}
                         placeholder="Owner"
                       />
@@ -1146,16 +1267,19 @@ function SettingsModal({ currentSession, onSave, onClose, onReset }) {
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const isNew = !editingSession;
     const id = editingSession?.id || uid();
     const session = { id, name: form.name || "Untitled Session", sprintNumber: parseInt(form.sprintNumber) || 1, date: form.date, cutoffDate: form.cutoffDate, cutoffTime: form.cutoffTime, q3Variant: parseInt(form.q3Variant) || 0, allowReactions: form.allowReactions, allowVoting: form.allowVoting };
-    if (isNew) wipeSessionData(id);
+    if (isNew) {
+      wipeSessionData(id);
+      // Also delete from Supabase if re-creating
+      if (supabase) await supabase.from("sessions").delete().eq("id", id);
+    }
     sessionStore.save(session);
     setSessions(sessionStore.list());
     setSaved(true);
     onSave(session);
-    // After save, go back to list
     setTimeout(() => { setSaved(false); setPanel("list"); }, 900);
   };
 
