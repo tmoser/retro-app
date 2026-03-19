@@ -66,6 +66,24 @@ const sessionStore = {
   isSubmissionOpen(session) { const c = sessionStore.getCutoff(session); return c ? Date.now() < c.getTime() : true; }
 };
 
+// One-time migration: clear stale rk_ data on first v2 load
+function runMigrationIfNeeded() {
+  try {
+    if (localStorage.getItem("rk_version") === "2") return;
+    Object.keys(localStorage).filter(k => k.startsWith("rk_")).forEach(k => localStorage.removeItem(k));
+    localStorage.setItem("rk_version", "2");
+    console.log("RetroKit v2: stale data cleared");
+  } catch(e) { console.warn("migration error", e); }
+}
+
+// Wipe everything — facilitator reset
+function wipeAllData() {
+  try {
+    Object.keys(localStorage).filter(k => k.startsWith("rk_")).forEach(k => localStorage.removeItem(k));
+    localStorage.setItem("rk_version", "2");
+  } catch(e) { console.warn("wipeAllData error", e); }
+}
+
 // Wipe all board/submission data for a given session id
 function wipeSessionData(id) {
   try {
@@ -85,14 +103,7 @@ function wipeSessionData(id) {
   } catch(e) { console.warn("wipeSessionData error", e); }
 }
 
-function getOrCreateDefaultSession() {
-  const sessions = sessionStore.list();
-  if (sessions.length > 0) return sessions[sessions.length - 1];
-  const id = uid();
-  const session = { id, name: "My Team Retro", sprintNumber: 13, date: "", cutoffDate: "", cutoffTime: "", q3Variant: 0, allowReactions: false, allowVoting: false };
-  sessionStore.save(session);
-  return session;
-}
+// Sessions created explicitly by facilitator — no auto-default
 
 // ── Countdown ─────────────────────────────────────────────────────────────────
 
@@ -138,17 +149,7 @@ function CountdownBar({ session }) {
 
 // ── Seed Data ─────────────────────────────────────────────────────────────────
 
-function seedCards() {
-  return [
-    { id: uid(), qId: "q1", content: "🚀", type: "emoji", author: "Alex", color: "#E8003D", groupId: null },
-    { id: uid(), qId: "q1", content: "💪", type: "emoji", author: "Sam", color: "#E8003D", groupId: null },
-    { id: uid(), qId: "q2", content: "Shipped the new dashboard on time despite scope changes", author: "Alex", color: "#10b981", groupId: null },
-    { id: uid(), qId: "q2", content: "Zero P1 bugs in production this sprint!", author: "Jordan", color: "#10b981", groupId: null },
-    { id: uid(), qId: "q3", content: "START: Weekly async design reviews so we catch issues earlier", author: "Sam", color: "#6366f1", groupId: null },
-    { id: uid(), qId: "q3", content: "STOP: Unplanned interruptions during focus blocks", author: "Alex", color: "#6366f1", groupId: null },
-    { id: uid(), qId: "q4", content: "Shoutout to Riley for staying late to fix the auth bug 🦸", author: "Alex", color: "#f59e0b", groupId: null },
-  ];
-}
+
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
@@ -833,7 +834,7 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
       const subs = keys.map(k => JSON.parse(localStorage.getItem(k))).filter(s => s && (s.sessionId === sessionId || s.sprintNumber === session?.sprintNumber));
       if (subs.length > 0) return subs.flatMap(sub => Object.entries(sub.answers).filter(([, val]) => val).map(([qId, content]) => ({ id: uid(), qId, content, author: sub.name, color: CARD_COLORS[Math.floor(Math.random() * CARD_COLORS.length)], groupId: null, type: qId === "q1" ? "emoji" : "text" })));
     } catch(e) { console.warn(e); }
-    return seedCards();
+    return []; // empty until real submissions arrive
   });
 
   // Submitted names — reactive, used by polling refresh
@@ -1118,7 +1119,7 @@ function HistoryView({ onLoadSession }) {
 
 const SETTINGS_PASSWORD = "retro2026";
 
-function SettingsModal({ currentSession, onSave, onClose }) {
+function SettingsModal({ currentSession, onSave, onClose, onReset }) {
   const [locked, setLocked] = useState(true); const [pw, setPw] = useState(""); const [pwError, setPwError] = useState(false);
   const [sessions, setSessions] = useState(() => sessionStore.list());
   const [editingId, setEditingId] = useState(currentSession?.id || null);
@@ -1169,7 +1170,14 @@ function SettingsModal({ currentSession, onSave, onClose }) {
                   </div>
                 ))}
               </div>
-              <button className="btn btn-secondary" onClick={handleNewSession} style={{ width: "100%", justifyContent: "center" }}>＋ New Session</button>
+              {sessions.length === 0 && (
+                <div style={{ textAlign: "center", padding: "20px 0 12px", color: "var(--text-muted)", fontSize: 13 }}>
+                  <div style={{ fontSize: 32, marginBottom: 8 }}>📋</div>
+                  <div style={{ fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>No sessions yet</div>
+                  <div style={{ fontSize: 12, marginBottom: 16 }}>Create your first session to get started.</div>
+                </div>
+              )}
+              <button className="btn btn-primary" onClick={handleNewSession} style={{ width: "100%", justifyContent: "center" }}>＋ {sessions.length === 0 ? "Create your first session" : "New Session"}</button>
             </div>
 
             <div className="settings-section">
@@ -1204,6 +1212,17 @@ function SettingsModal({ currentSession, onSave, onClose }) {
                 <div className="edit-link-copy-row"><div className="edit-link-url" title={newSessionLink}>{newSessionLink}</div><CopyButton text={newSessionLink} /></div>
               </div>
             )}
+            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 16, marginTop: 4 }}>
+              <button className="btn btn-danger" style={{ fontSize: 12 }} onClick={() => {
+                if (!window.confirm("This will delete ALL sessions, submissions, and board data. Are you sure?")) return;
+                wipeAllData();
+                setSessions([]);
+                setEditingId(null);
+                setForm({ name: "", sprintNumber: 1, date: "", cutoffDate: "", cutoffTime: "", q3Variant: 0, allowReactions: false, allowVoting: false });
+                setNewSessionLink(null);
+                onReset();
+              }}>⚠ Reset all data</button>
+            </div>
             <div className="modal-btns">
               <button className="btn btn-secondary" onClick={onClose}>Close</button>
               {saved ? <span className="settings-saved">✓ Saved!</span> : <button className="btn btn-primary" onClick={handleSave}>{editingId ? "Save Changes" : "Create Session →"}</button>}
@@ -1282,6 +1301,9 @@ function JoinScreen({ session, onJoin, joined, savedName }) {
 // ── App Shell ─────────────────────────────────────────────────────────────────
 
 export default function App() {
+  // Run one-time migration on mount
+  runMigrationIfNeeded();
+
   const [view, setView] = useState("submit");
   const [showSettings, setShowSettings] = useState(false);
   const [isFacilitator, setIsFacilitator] = useState(() => facilitatorStore.is());
@@ -1291,16 +1313,19 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const sid = params.get("session");
     if (sid) { const s = sessionStore.get(sid); if (s) return s; }
-    return getOrCreateDefaultSession();
+    // No URL session — use most recent saved session if any
+    const sessions = sessionStore.list();
+    return sessions.length > 0 ? sessions[sessions.length - 1] : null;
   });
 
   const [currentUser, setCurrentUser] = useState(() => {
-    try {
-      const saved = localStorage.getItem(`rk_name_${activeSession.id}`);
-      return saved || null;
-    } catch(e) { console.warn(e); return null; }
+    if (!activeSession) return null;
+    try { return localStorage.getItem(`rk_name_${activeSession.id}`) || null; } catch(e) { console.warn(e); return null; }
   });
-  const [joined, setJoined] = useState(() => { try { return JSON.parse(localStorage.getItem(`rk_joined_${activeSession.id}`) || "[]"); } catch(e) { console.warn(e); return []; } });
+  const [joined, setJoined] = useState(() => {
+    if (!activeSession) return [];
+    try { return JSON.parse(localStorage.getItem(`rk_joined_${activeSession.id}`) || "[]"); } catch(e) { console.warn(e); return []; }
+  });
   const [joinQ1, setJoinQ1] = useState("");
 
   const handleJoin = (name, q1Val) => {
@@ -1319,8 +1344,23 @@ export default function App() {
     setView("submit");
   };
 
-  const questions = QUESTIONS(activeSession.sprintNumber, Q3_VARIANTS[activeSession.q3Variant ?? 0]);
+  const questions = activeSession ? QUESTIONS(activeSession.sprintNumber, Q3_VARIANTS[activeSession.q3Variant ?? 0]) : [];
   const allSessions = sessionStore.list();
+
+  // No sessions at all → show settings immediately (password first, then empty state)
+  if (!activeSession) {
+    return (
+      <>
+        <style>{css}</style>
+        <SettingsModal
+          currentSession={null}
+          onSave={session => { setActiveSession(session); setIsFacilitator(facilitatorStore.is()); }}
+          onClose={() => {}} // can't close with no session
+          onReset={() => { setActiveSession(null); setCurrentUser(null); }}
+        />
+      </>
+    );
+  }
 
   const savedName = (() => { try { return localStorage.getItem(`rk_name_${activeSession.id}`) || null; } catch { return null; } })();
   if (!currentUser) return (<><style>{css}</style><JoinScreen session={activeSession} onJoin={handleJoin} joined={joined} savedName={savedName} /></>);
@@ -1367,7 +1407,7 @@ export default function App() {
         {view === "board" && <BoardView session={activeSession} members={joined} questions={questions} currentUser={currentUser} onNewSubmissions={() => setHasNewSubmissions(true)} />}
         {view === "history" && <HistoryView onLoadSession={handleSwitchSession} />}
 
-        {showSettings && <SettingsModal currentSession={activeSession} onSave={handleSaveSettings} onClose={() => { setShowSettings(false); setIsFacilitator(facilitatorStore.is()); }} />}
+        {showSettings && <SettingsModal currentSession={activeSession} onSave={handleSaveSettings} onClose={() => { setShowSettings(false); setIsFacilitator(facilitatorStore.is()); }} onReset={() => { wipeAllData(); setActiveSession(null); setCurrentUser(null); setShowSettings(false); }} />}
       </div>
     </>
   );
