@@ -66,6 +66,25 @@ const sessionStore = {
   isSubmissionOpen(session) { const c = sessionStore.getCutoff(session); return c ? Date.now() < c.getTime() : true; }
 };
 
+// Wipe all board/submission data for a given session id
+function wipeSessionData(id) {
+  try {
+    // Free cards, votes
+    localStorage.removeItem(`rk_free_${id}`);
+    localStorage.removeItem(`rk_votes_${id}`);
+    localStorage.removeItem(`rk_joined_${id}`);
+    // Submissions scoped to this session
+    Object.keys(localStorage)
+      .filter(k => k.startsWith("rk_sub_"))
+      .forEach(k => {
+        try {
+          const s = JSON.parse(localStorage.getItem(k));
+          if (s && s.sessionId === id) localStorage.removeItem(k);
+        } catch {}
+      });
+  } catch(e) { console.warn("wipeSessionData error", e); }
+}
+
 function getOrCreateDefaultSession() {
   const sessions = sessionStore.list();
   if (sessions.length > 0) return sessions[sessions.length - 1];
@@ -413,7 +432,7 @@ const css = `
   .join-greeting-text { font-size: 15px; color: var(--text-muted); margin-bottom: 20px; }
 
   /* ── BOARD ── */
-  .board-wrap { background: var(--bg); min-height: calc(100vh - 56px); }
+  .board-wrap { background: var(--bg); min-height: calc(100vh - 56px); overflow-x: auto; }
 
   /* Presence strip */
   .presence-strip { display: flex; align-items: center; gap: 6px; padding: 7px 20px; background: var(--bg-card); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text-muted); flex-wrap: wrap; }
@@ -943,8 +962,8 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
         )}
         {freeCards.length > 0 && <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 12 }}>💡 <strong style={{ color: "var(--text-muted)" }}>{freeCards.length} free card{freeCards.length !== 1 ? "s" : ""}</strong> on canvas — drag, double-click to edit</div>}
 
-        <div style={{ overflowX: "auto", paddingBottom: 24 }}>
-          <div style={{ display: "flex", gap: 16, alignItems: "flex-start", minWidth: "max-content", position: "relative" }}>
+        <div style={{ paddingBottom: 40 }}>
+          <div style={{ display: "flex", gap: 16, alignItems: "flex-start", position: "relative", flexWrap: "nowrap" }}>
             {/* Free cards canvas */}
             <div ref={canvasRef} style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 20 }}>
               {freeCards.map(card => <div key={card.id} style={{ pointerEvents: "all" }}><FreeCard card={card} onDragStart={handleDragStart} onEdit={handleEditCard} onDelete={handleDeleteCard} /></div>)}
@@ -1116,11 +1135,13 @@ function SettingsModal({ currentSession, onSave, onClose }) {
   const selectSession = s => { setEditingId(s.id); setForm({ name: s.name, sprintNumber: s.sprintNumber, date: s.date || "", cutoffDate: s.cutoffDate || "", cutoffTime: s.cutoffTime || "", q3Variant: s.q3Variant ?? 0, allowReactions: s.allowReactions ?? false, allowVoting: s.allowVoting ?? false }); setNewSessionLink(null); setSaved(false); };
   const handleNewSession = () => { setEditingId(null); setForm({ name: "", sprintNumber: 1, date: "", cutoffDate: "", cutoffTime: "", q3Variant: 0, allowReactions: false, allowVoting: false }); setNewSessionLink(null); setSaved(false); };
   const handleSave = () => {
+    const isNew = !editingId;
     const id = editingId || uid();
     const session = { id, name: form.name || "Untitled Session", sprintNumber: parseInt(form.sprintNumber) || 1, date: form.date, cutoffDate: form.cutoffDate, cutoffTime: form.cutoffTime, q3Variant: parseInt(form.q3Variant) || 0, allowReactions: form.allowReactions, allowVoting: form.allowVoting };
+    if (isNew) wipeSessionData(id); // fresh slate for new sessions
     sessionStore.save(session); setSessions(sessionStore.list()); setEditingId(id); setNewSessionLink(sessionStore.getSessionUrl(id)); setSaved(true); onSave(session); setTimeout(() => setSaved(false), 2000);
   };
-  const handleDelete = (e, id) => { e.stopPropagation(); if (!window.confirm("Delete this session?")) return; sessionStore.delete(id); setSessions(sessionStore.list()); if (editingId === id) { setEditingId(null); setForm({ name: "", sprintNumber: 1, date: "", cutoffDate: "", cutoffTime: "", q3Variant: 0, allowReactions: false, allowVoting: false }); } };
+  const handleDelete = (e, id) => { e.stopPropagation(); if (!window.confirm("Delete this session and all its data?")) return; wipeSessionData(id); sessionStore.delete(id); setSessions(sessionStore.list()); if (editingId === id) { setEditingId(null); setForm({ name: "", sprintNumber: 1, date: "", cutoffDate: "", cutoffTime: "", q3Variant: 0, allowReactions: false, allowVoting: false }); } };
 
   return (
     <div className="modal-overlay" onClick={onClose}>
