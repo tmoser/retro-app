@@ -655,6 +655,10 @@ const submissionsStore = {
   async save(token, data) {
     try { localStorage.setItem("rk_sub_" + token, JSON.stringify(data)); } catch(e) { console.warn(e); }
     if (supabase) {
+      // Use name+session_id as the natural key so edits replace rather than duplicate
+      // First delete any existing submission with same name+session to avoid duplicates
+      await supabase.from("submissions").delete()
+        .eq("session_id", data.sessionId).eq("name", data.name).neq("id", token);
       const { error } = await supabase.from("submissions").upsert({
         id: token, session_id: data.sessionId, name: data.name,
         answers: data.answers, submitted_at: data.submittedAt
@@ -872,6 +876,7 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
   const [votes, setVotes] = useState({});
   const [actionItemsLoaded, setActionItemsLoaded] = useState(false);
   const [hasNewSubmissions, setHasNewSubmissions] = useState(false);
+  const [livePresence, setLivePresence] = useState([]);
 
   // Helper: map a submission row to card objects
   const subToCards = sub => Object.entries(sub.answers || {}).filter(([, val]) => val).map(([qId, content]) => ({
@@ -880,67 +885,108 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
     groupId: null, type: qId === "q1" ? "emoji" : "text"
   }));
 
-  // Load submissions from Supabase on mount
+  // Load all data + set up real-time subscriptions
   useEffect(() => {
     if (!sessionId) return;
-    if (supabase) {
-      supabase.from("submissions").select("*").eq("session_id", sessionId)
-        .then(({ data, error }) => {
-          if (error) { console.warn("load submissions:", error.message); return; }
-          if (data?.length) {
-            setCards(data.flatMap(subToCards));
-            setSubmittedNames([...new Set(data.map(s => s.name).filter(Boolean))]);
-          }
-        });
-      // Load free cards
-      supabase.from("free_cards").select("*").eq("session_id", sessionId)
-        .then(({ data, error }) => {
-          if (error) { console.warn("load free_cards:", error.message); return; }
-          if (data) setFreeCards(data.map(r => ({ id: r.id, content: r.content, author: r.author, color: r.color, x: r.x, y: r.y })));
-        });
-      // Load votes
-      supabase.from("votes").select("*").eq("session_id", sessionId)
-        .then(({ data, error }) => {
-          if (error) { console.warn("load votes:", error.message); return; }
-          if (data) {
-            const v = {};
-            data.forEach(row => { if (!v[row.card_id]) v[row.card_id] = {}; v[row.card_id][row.user_name] = row.direction; });
-            setVotes(v);
-          }
-        });
-      // Load action items
-      supabase.from("action_items").select("*").eq("session_id", sessionId).order("created_at")
-        .then(({ data, error }) => {
-          if (error) { console.warn("load action_items:", error.message); return; }
-          if (data?.length) { setActionItems(data.map(r => ({ id: r.id, text: r.text, owner: r.owner, done: r.done }))); }
-          setActionItemsLoaded(true);
-        });
-
-      // Real-time subscription for new submissions
-      const channel = supabase.channel(`session-${sessionId}`)
-        .on("postgres_changes", { event: "INSERT", schema: "public", table: "submissions", filter: `session_id=eq.${sessionId}` },
-          payload => {
-            const newSub = payload.new;
-            setCards(prev => [...prev, ...subToCards(newSub)]);
-            setSubmittedNames(prev => [...new Set([...prev, newSub.name])]);
-            setHasNewSubmissions(true);
-            onNewSubmissions?.();
-          }
-        )
-        .subscribe();
-      return () => supabase.removeChannel(channel);
-    } else {
-      // localStorage fallback (same browser only)
+    if (!supabase) {
+      // localStorage fallback
       try {
         const keys = Object.keys(localStorage).filter(k => k.startsWith("rk_sub_"));
         const subs = keys.map(k => JSON.parse(localStorage.getItem(k))).filter(s => s?.sessionId === sessionId);
-        if (subs.length) {
-          setCards(subs.flatMap(subToCards));
-          setSubmittedNames([...new Set(subs.map(s => s.name).filter(Boolean))]);
-        }
+        if (subs.length) { setCards(subs.flatMap(subToCards)); setSubmittedNames([...new Set(subs.map(s => s.name).filter(Boolean))]); }
       } catch(e) { console.warn(e); }
       setActionItemsLoaded(true);
+      return;
     }
+
+    // Load initial data
+    Promise.all([
+      supabase.from("submissions").select("*").eq("session_id", sessionId),
+      supabase.from("free_cards").select("*").eq("session_id", sessionId),
+      supabase.from("votes").select("*").eq("session_id", sessionId),
+      supabase.from("action_items").select("*").eq("session_id", sessionId).order("created_at"),
+      supabase.from("session_state").select("*").eq("session_id", sessionId).single(),
+    ]).then(([subs, fcs, vts, acts, state]) => {
+      if (subs.data?.length) {
+        setCards(subs.data.flatMap(subToCards));
+        setSubmittedNames([...new Set(subs.data.map(s => s.name).filter(Boolean))]);
+      }
+      if (fcs.data) setFreeCards(fcs.data.map(r => ({ id: r.id, content: r.content, author: r.author, color: r.color, x: r.x, y: r.y })));
+      if (vts.data) {
+        const v = {};
+        vts.data.forEach(row => { if (!v[row.card_id]) v[row.card_id] = {}; v[row.card_id][row.user_name] = row.direction; });
+        setVotes(v);
+      }
+      if (acts.data?.length) setActionItems(acts.data.map(r => ({ id: r.id, text: r.text, owner: r.owner, done: r.done })));
+      setActionItemsLoaded(true);
+      if (state.data?.revealed) { setRevealed(true); setRevealKey(k => k + 1); }
+    });
+
+    // Postgres changes channel
+    const dbChannel = supabase.channel(`db-${sessionId}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "submissions", filter: `session_id=eq.${sessionId}` }, payload => {
+        const s = payload.new;
+        setCards(prev => [...prev.filter(c => c.author !== s.name), ...subToCards(s)]);
+        setSubmittedNames(prev => [...new Set([...prev, s.name])]);
+        setHasNewSubmissions(true); onNewSubmissions?.();
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "submissions", filter: `session_id=eq.${sessionId}` }, payload => {
+        const s = payload.new;
+        setCards(prev => [...prev.filter(c => c.author !== s.name), ...subToCards(s)]);
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "session_state", filter: `session_id=eq.${sessionId}` }, payload => {
+        const revealed = payload.new.revealed;
+        setRevealed(revealed);
+        if (revealed) setRevealKey(k => k + 1);
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "votes", filter: `session_id=eq.${sessionId}` }, payload => {
+        const r = payload.new;
+        setVotes(prev => { const next = { ...prev }; if (!next[r.card_id]) next[r.card_id] = {}; next[r.card_id][r.user_name] = r.direction; return next; });
+      })
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "votes", filter: `session_id=eq.${sessionId}` }, payload => {
+        const r = payload.old;
+        setVotes(prev => { const next = { ...prev }; if (next[r.card_id]) delete next[r.card_id][r.user_name]; return next; });
+      })
+      .subscribe();
+
+    // Presence channel — who's on the board right now
+    const presenceChannel = supabase.channel(`presence-${sessionId}`, { config: { presence: { key: currentUser } } })
+      .on("presence", { event: "sync" }, () => {
+        const state = presenceChannel.presenceState();
+        const names = Object.values(state).flat().map(p => p.name).filter(Boolean);
+        setLivePresence([...new Set(names)]);
+      })
+      .subscribe(async status => {
+        if (status === "SUBSCRIBED") {
+          await presenceChannel.track({ name: currentUser, joinedAt: new Date().toISOString() });
+        }
+      });
+
+    // Broadcast channel for ephemeral reactions
+    const reactionChannel = supabase.channel(`reactions-${sessionId}`)
+      .on("broadcast", { event: "reaction" }, ({ payload }) => {
+        const id = uid();
+        const x = 100 + Math.random() * (window.innerWidth - 200);
+        const y = 100 + Math.random() * (window.innerHeight - 200);
+        setReactions(r => [...r, { id, emoji: payload.emoji, x, y }]);
+        setTimeout(() => setReactions(r => r.filter(rx => rx.id !== id)), 2400);
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(dbChannel);
+      presenceChannel.untrack().then(() => supabase.removeChannel(presenceChannel));
+      supabase.removeChannel(reactionChannel);
+    };
+  }, [sessionId, currentUser]);
+
+  // Store reaction channel ref for sending
+  const reactionChannelRef = useRef(null);
+  useEffect(() => {
+    if (!supabase || !sessionId) return;
+    reactionChannelRef.current = supabase.channel(`reactions-${sessionId}-send`);
+    reactionChannelRef.current.subscribe();
+    return () => supabase.removeChannel(reactionChannelRef.current);
   }, [sessionId]);
 
   const cardsWithVotes = cards.map(c => ({ ...c, votes: votes[c.id] || {} }));
@@ -1016,7 +1062,18 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
   };
   useEffect(() => () => { window.removeEventListener("mousemove", handleDragMove); window.removeEventListener("mouseup", handleDragEnd); }, []);
 
-  const dropReaction = emoji => { const id = uid(); const x = 100 + Math.random() * (window.innerWidth - 200); const y = 100 + Math.random() * (window.innerHeight - 200); setReactions(r => [...r, { id, emoji, x, y }]); setTimeout(() => setReactions(r => r.filter(rx => rx.id !== id)), 2400); };
+  const dropReaction = async emoji => {
+    // Show locally immediately
+    const id = uid();
+    const x = 100 + Math.random() * (window.innerWidth - 200);
+    const y = 100 + Math.random() * (window.innerHeight - 200);
+    setReactions(r => [...r, { id, emoji, x, y }]);
+    setTimeout(() => setReactions(r => r.filter(rx => rx.id !== id)), 2400);
+    // Broadcast to others
+    if (supabase && reactionChannelRef.current) {
+      await reactionChannelRef.current.send({ type: "broadcast", event: "reaction", payload: { emoji } });
+    }
+  };
 
   const cardsForQ = qId => cardsWithVotes.filter(c => c.qId === qId);
   const applyGroup = (cardId, groupId) => setCards(cs => cs.map(c => c.id === cardId ? { ...c, groupId } : c));
@@ -1052,7 +1109,18 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
     if (supabase) await supabase.from("action_items").update({ owner }).eq("id", id);
   };
 
-  const handleReveal = () => { setRevealed(true); setRevealKey(k => k + 1); };
+  const handleReveal = async () => {
+    setRevealed(true); setRevealKey(k => k + 1);
+    if (supabase) {
+      await supabase.from("session_state").upsert({ session_id: sessionId, revealed: true, updated_at: new Date().toISOString() });
+    }
+  };
+  const handleHide = async () => {
+    setRevealed(false);
+    if (supabase) {
+      await supabase.from("session_state").upsert({ session_id: sessionId, revealed: false, updated_at: new Date().toISOString() });
+    }
+  };
 
   return (
     <div className="board-wrap">
@@ -1075,25 +1143,35 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
             <>
               {!revealed
                 ? <button className="btn btn-secondary" onClick={handleReveal}>👁 Reveal Cards</button>
-                : <button className="btn btn-success" onClick={() => setRevealed(false)}>🙈 Hide Cards</button>
+                : <button className="btn btn-success" onClick={handleHide}>🙈 Hide Cards</button>
               }
               <button className="btn btn-ghost" onClick={() => setShowAI("q3")}>✨ AI Suggestions</button>
               <button className="btn btn-ghost" onClick={() => exportCSV({ session, questions, cards: cardsWithVotes, freeCards, actionItems })}>⬇ Export</button>
             </>
           )}
           {isFacilitator && <span className="facilitator-badge">Facilitator</span>}
-          {/* Submitted name chips */}
+          {/* Live presence + submitted chips */}
           <div style={{ display: "flex", alignItems: "center", gap: 5, marginLeft: "auto", flexWrap: "wrap" }}>
+            {livePresence.length > 0 && <>
+              <span style={{ fontSize: 10, color: "#34d399", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginRight: 2 }}>On board</span>
+              {livePresence.map((name, i) => (
+                <div key={`live-${i}`} className="sub-chip" style={{ background: "rgba(16,185,129,.08)", border: "1px solid rgba(16,185,129,.25)" }}>
+                  <div className="sub-chip-dot" style={{ background: AVATAR_COLORS[i % AVATAR_COLORS.length], boxShadow: "0 0 0 2px #10b981" }}>{name[0]}</div>
+                  <span style={{ color: "#34d399" }}>{name}</span>
+                </div>
+              ))}
+              <span style={{ color: "var(--text-dim)", fontSize: 10, margin: "0 2px" }}>·</span>
+            </>}
             {submittedNames.length > 0 && (
               <span style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginRight: 2 }}>Submitted</span>
             )}
             {submittedNames.map((name, i) => (
-              <div key={i} className="sub-chip">
+              <div key={`sub-${i}`} className="sub-chip">
                 <div className="sub-chip-dot" style={{ background: AVATAR_COLORS[i % AVATAR_COLORS.length] }}>{name[0]}</div>
                 {name}
               </div>
             ))}
-            {submittedNames.length === 0 && <span style={{ fontSize: 11, color: "var(--text-dim)" }}>No submissions yet</span>}
+            {submittedNames.length === 0 && livePresence.length === 0 && <span style={{ fontSize: 11, color: "var(--text-dim)" }}>No submissions yet</span>}
           </div>
         </div>
 
@@ -1514,7 +1592,14 @@ export default function App() {
   // Run one-time migration on mount
   runMigrationIfNeeded();
 
-  const [view, setView] = useState("submit");
+  const [view, setView] = useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const sid = params.get("session");
+      const key = sid ? `rk_tab_${sid}` : "rk_tab";
+      return localStorage.getItem(key) || "submit";
+    } catch { return "submit"; }
+  });
   const [showSettings, setShowSettings] = useState(false);
   const [isFacilitator, setIsFacilitator] = useState(() => facilitatorStore.is());
   const [hasNewSubmissions, setHasNewSubmissions] = useState(false);
@@ -1627,7 +1712,14 @@ export default function App() {
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div className="nav-tabs">
               {[["submit", "Submit"], ["board", "Board"]].map(([v, label]) => (
-                <button key={v} className={`nav-tab ${view === v ? "active" : ""}`} onClick={() => { try { window.history.replaceState({}, "", window.location.href.split("?")[0]); } catch(e) { console.warn(e); } setView(v); }}>
+                <button key={v} className={`nav-tab ${view === v ? "active" : ""}`} onClick={() => {
+                  try {
+                    window.history.replaceState({}, "", window.location.href.split("?")[0]);
+                    const sid = activeSession?.id;
+                    if (sid) localStorage.setItem(`rk_tab_${sid}`, v);
+                  } catch(e) { console.warn(e); }
+                  setView(v);
+                }}>
                   {label}
                   {v === "board" && hasNewSubmissions && <span className="nav-tab-dot" title="New submissions available" />}
                 </button>
