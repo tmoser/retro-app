@@ -4,6 +4,9 @@ import { createClient } from "@supabase/supabase-js";
 const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY || "";
 const supabase = SUPABASE_URL && SUPABASE_ANON_KEY ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+console.log("[RetroKit] Supabase URL:", SUPABASE_URL ? SUPABASE_URL.slice(0,30)+"..." : "MISSING");
+console.log("[RetroKit] Supabase key:", SUPABASE_ANON_KEY ? "present ("+SUPABASE_ANON_KEY.length+" chars)" : "MISSING");
+console.log("[RetroKit] Supabase client:", supabase ? "OK" : "NULL - localStorage fallback only");
 
 // ── Data ──────────────────────────────────────────────────────────────────────
 
