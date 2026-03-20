@@ -85,10 +85,9 @@ const sessionStore = {
 // One-time migration: clear stale rk_ data on first v2 load
 function runMigrationIfNeeded() {
   try {
-    if (localStorage.getItem("rk_version") === "2") return;
-    Object.keys(localStorage).filter(k => k.startsWith("rk_")).forEach(k => localStorage.removeItem(k));
+    // Just stamp the version — never wipe data on load
+    // (wiping is only done explicitly via "Reset all data" button)
     localStorage.setItem("rk_version", "2");
-    console.log("RetroKit v2: stale data cleared");
   } catch(e) { console.warn("migration error", e); }
 }
 
