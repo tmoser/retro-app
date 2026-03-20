@@ -44,27 +44,37 @@ const facilitatorStore = {
 
 // ── Session Store ─────────────────────────────────────────────────────────────
 
+const LS_KEY = "rk_sessions_v2";
+
+// Local helpers
+function lsSessions() { try { return JSON.parse(localStorage.getItem(LS_KEY) || "[]"); } catch { return []; } }
+function lsSessionMap(s) { return { id: s.id, name: s.name, sprintNumber: s.sprint_number ?? s.sprintNumber, date: s.date || "", cutoffDate: s.cutoff_date ?? s.cutoffDate ?? "", cutoffTime: s.cutoff_time ?? s.cutoffTime ?? "", q3Variant: s.q3_variant ?? s.q3Variant ?? 0, allowReactions: s.allow_reactions ?? s.allowReactions ?? false, allowVoting: s.allow_voting ?? s.allowVoting ?? false }; }
+
 const sessionStore = {
-  list() {
-    try {
-      const ids = JSON.parse(localStorage.getItem("rk_sessions") || "[]");
-      return ids.map(id => { try { return JSON.parse(localStorage.getItem("rk_session_" + id)); } catch { return null; } }).filter(Boolean);
-    } catch(e) { console.warn(e); return []; }
-  },
-  get(id) { try { return JSON.parse(localStorage.getItem("rk_session_" + id)); } catch(e) { console.warn(e); return null; } },
+  list() { return lsSessions(); },
+  get(id) { return lsSessions().find(s => s.id === id) || null; },
   save(session) {
     try {
-      localStorage.setItem("rk_session_" + session.id, JSON.stringify(session));
-      const ids = JSON.parse(localStorage.getItem("rk_sessions") || "[]");
-      if (!ids.includes(session.id)) { ids.push(session.id); localStorage.setItem("rk_sessions", JSON.stringify(ids)); }
+      const all = lsSessions();
+      const idx = all.findIndex(s => s.id === session.id);
+      if (idx >= 0) all[idx] = session; else all.push(session);
+      localStorage.setItem(LS_KEY, JSON.stringify(all));
     } catch(e) { console.warn(e); }
+    // Save to Supabase so any browser can find it
+    if (supabase) {
+      supabase.from("sessions").upsert({
+        id: session.id, name: session.name, sprint_number: session.sprintNumber,
+        date: session.date || null, cutoff_date: session.cutoffDate || null,
+        cutoff_time: session.cutoffTime || null, q3_variant: session.q3Variant ?? 0,
+        allow_reactions: session.allowReactions ?? false, allow_voting: session.allowVoting ?? false
+      }).then(({ error }) => { if (error) console.warn("session save:", error.message); });
+    }
   },
   delete(id) {
     try {
-      localStorage.removeItem("rk_session_" + id);
-      const ids = JSON.parse(localStorage.getItem("rk_sessions") || "[]");
-      localStorage.setItem("rk_sessions", JSON.stringify(ids.filter(i => i !== id)));
+      localStorage.setItem(LS_KEY, JSON.stringify(lsSessions().filter(s => s.id !== id)));
     } catch(e) { console.warn(e); }
+    if (supabase) supabase.from("sessions").delete().eq("id", id).then(({ error }) => { if (error) console.warn("session delete:", error.message); });
   },
   getSessionUrl(id) {
     const base = window.location.origin + window.location.pathname.replace(/\?.*$/, "");
@@ -1513,23 +1523,37 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const sid = params.get("session");
     if (sid) {
-      // Try local storage first
       const local = sessionStore.get(sid);
       if (local) return local;
-      // Try embedded config in URL (for team members in fresh browsers)
       const sc = params.get("sc");
       if (sc) {
         try {
           const session = JSON.parse(atob(sc));
-          sessionStore.save(session); // cache locally for future visits
+          sessionStore.save(session);
           return session;
         } catch(e) { console.warn("Failed to decode session config", e); }
       }
-      return null; // session not found
+      return null;
     }
     const sessions = sessionStore.list();
     return sessions.length > 0 ? sessions[sessions.length - 1] : null;
   });
+
+  // On mount: if no local sessions, try loading from Supabase (handles lost localStorage)
+  useEffect(() => {
+    if (sessionStore.list().length === 0 && supabase) {
+      supabase.from("sessions").select("*").order("created_at", { ascending: false })
+        .then(({ data, error }) => {
+          if (error) { console.warn("load sessions:", error.message); return; }
+          if (data?.length) {
+            const mapped = data.map(lsSessionMap);
+            localStorage.setItem(LS_KEY, JSON.stringify(mapped));
+            setActiveSession(mapped[0]);
+            setAllSessionsState(mapped);
+          }
+        });
+    }
+  }, []);
 
   const [currentUser, setCurrentUser] = useState(() => {
     if (!activeSession) return null;
@@ -1549,6 +1573,7 @@ export default function App() {
   const handleSaveSettings = session => {
     setActiveSession(session);
     setIsFacilitator(facilitatorStore.is());
+    setAllSessionsState(sessionStore.list());
   };
 
   const handleSwitchSession = session => {
@@ -1558,7 +1583,8 @@ export default function App() {
   };
 
   const questions = activeSession ? QUESTIONS(activeSession.sprintNumber, Q3_VARIANTS[activeSession.q3Variant ?? 0]) : [];
-  const allSessions = sessionStore.list();
+  const [allSessionsState, setAllSessionsState] = useState(() => sessionStore.list());
+  const allSessions = allSessionsState.length ? allSessionsState : sessionStore.list();
 
   // No sessions at all → show settings immediately (password first, then empty state)
   if (!activeSession) {
