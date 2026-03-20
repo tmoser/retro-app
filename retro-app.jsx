@@ -891,8 +891,8 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
   // Load all data + set up real-time subscriptions
   useEffect(() => {
     if (!sessionId) return;
-    if (subscribedRef.current) return; // prevent duplicate subscriptions
-    subscribedRef.current = true;
+    if (subscribedRef.current === sessionId) return; // prevent duplicate subscriptions for same session
+    subscribedRef.current = sessionId;
     if (!supabase) {
       // localStorage fallback
       try {
@@ -969,7 +969,7 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
         }
       });
 
-    // Broadcast channel for ephemeral reactions
+    // Broadcast channel for ephemeral reactions — same channel for send + receive
     const reactionChannel = supabase.channel(`reactions-${sessionId}`)
       .on("broadcast", { event: "reaction" }, ({ payload }) => {
         const id = uid();
@@ -979,22 +979,18 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
         setTimeout(() => setReactions(r => r.filter(rx => rx.id !== id)), 2400);
       })
       .subscribe();
+    reactionChannelRef.current = reactionChannel;
 
     return () => {
+      subscribedRef.current = null; // reset so re-mount works
       supabase.removeChannel(dbChannel);
       presenceChannel.untrack().then(() => supabase.removeChannel(presenceChannel));
       supabase.removeChannel(reactionChannel);
+      reactionChannelRef.current = null;
     };
   }, [sessionId, currentUser]);
 
-  // Store reaction channel ref for sending
   const reactionChannelRef = useRef(null);
-  useEffect(() => {
-    if (!supabase || !sessionId) return;
-    reactionChannelRef.current = supabase.channel(`reactions-${sessionId}-send`);
-    reactionChannelRef.current.subscribe();
-    return () => supabase.removeChannel(reactionChannelRef.current);
-  }, [sessionId]);
 
   const cardsWithVotes = cards.map(c => ({ ...c, votes: votes[c.id] || {} }));
 
@@ -1122,13 +1118,24 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
       if (error) console.warn("add action_item:", error.message);
     }
   };
-  const editActionText = async (id, text) => {
+  const actionDebounceRef = useRef({});
+  const editActionText = (id, text) => {
     setActionItems(a => a.map(i => i.id === id ? { ...i, text } : i));
-    if (supabase) await supabase.from("action_items").update({ text }).eq("id", id);
+    if (supabase) {
+      clearTimeout(actionDebounceRef.current[`text_${id}`]);
+      actionDebounceRef.current[`text_${id}`] = setTimeout(() => {
+        supabase.from("action_items").update({ text }).eq("id", id);
+      }, 500);
+    }
   };
-  const editActionOwner = async (id, owner) => {
+  const editActionOwner = (id, owner) => {
     setActionItems(a => a.map(i => i.id === id ? { ...i, owner } : i));
-    if (supabase) await supabase.from("action_items").update({ owner }).eq("id", id);
+    if (supabase) {
+      clearTimeout(actionDebounceRef.current[`owner_${id}`]);
+      actionDebounceRef.current[`owner_${id}`] = setTimeout(() => {
+        supabase.from("action_items").update({ owner }).eq("id", id);
+      }, 500);
+    }
   };
 
   const handleReveal = async () => {
@@ -1630,8 +1637,12 @@ export default function App() {
 
   const [view, setView] = useState(() => {
     try {
+      // Try URL param first, then fall back to most recent session in localStorage
       const params = new URLSearchParams(window.location.search);
-      const sid = params.get("session");
+      const sid = params.get("session") || (() => {
+        const sessions = JSON.parse(localStorage.getItem("rk_sessions_v2") || "[]");
+        return sessions.length ? sessions[sessions.length - 1].id : null;
+      })();
       const key = sid ? `rk_tab_${sid}` : "rk_tab";
       return localStorage.getItem(key) || "submit";
     } catch { return "submit"; }
