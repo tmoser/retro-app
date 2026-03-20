@@ -18,10 +18,10 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          REACT_APP_TENOR_KEY: ${{ secrets.REACT_APP_TENOR_KEY }}
-          REACT_APP_GIPHY_KEY: ${{ secrets.REACT_APP_GIPHY_KEY }}
-          REACT_APP_SUPABASE_URL: ${{ secrets.REACT_APP_SUPABASE_URL }}
-          REACT_APP_SUPABASE_ANON_KEY: ${{ secrets.REACT_APP_SUPABASE_ANON_KEY }}
+          VITE_TENOR_KEY: ${{ secrets.VITE_TENOR_KEY }}
+          VITE_GIPHY_KEY: ${{ secrets.VITE_GIPHY_KEY }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
       - uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
