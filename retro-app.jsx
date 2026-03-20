@@ -243,6 +243,7 @@ const css = `
   .countdown-time { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .5px; }
   .countdown-label { opacity: .65; font-size: 11px; }
   @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.6; } }
+  @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
 
   /* ── BUTTONS ── */
   .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: var(--radius); border: 1px solid transparent; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: all .15s; white-space: nowrap; }
@@ -877,6 +878,8 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
   const [actionItemsLoaded, setActionItemsLoaded] = useState(false);
   const [hasNewSubmissions, setHasNewSubmissions] = useState(false);
   const [livePresence, setLivePresence] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const subscribedRef = useRef(false);
 
   // Helper: map a submission row to card objects
   const subToCards = sub => Object.entries(sub.answers || {}).filter(([, val]) => val).map(([qId, content]) => ({
@@ -888,6 +891,8 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
   // Load all data + set up real-time subscriptions
   useEffect(() => {
     if (!sessionId) return;
+    if (subscribedRef.current) return; // prevent duplicate subscriptions
+    subscribedRef.current = true;
     if (!supabase) {
       // localStorage fallback
       try {
@@ -896,6 +901,7 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
         if (subs.length) { setCards(subs.flatMap(subToCards)); setSubmittedNames([...new Set(subs.map(s => s.name).filter(Boolean))]); }
       } catch(e) { console.warn(e); }
       setActionItemsLoaded(true);
+      setLoading(false);
       return;
     }
 
@@ -920,6 +926,7 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
       if (acts.data?.length) setActionItems(acts.data.map(r => ({ id: r.id, text: r.text, owner: r.owner, done: r.done })));
       setActionItemsLoaded(true);
       if (state.data?.revealed) { setRevealed(true); setRevealKey(k => k + 1); }
+      setLoading(false);
     });
 
     // Postgres changes channel
@@ -1015,11 +1022,17 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
   const [reactions, setReactions] = useState([]);
   const canvasRef = useRef(null); const dragState = useRef(null);
 
-  const saveFreeCard = async (card) => {
-    if (supabase) {
-      const { error } = await supabase.from("free_cards").upsert({ id: card.id, session_id: sessionId, content: card.content, author: card.author, color: card.color, x: card.x, y: card.y });
-      if (error) console.warn("save free_card:", error.message);
-    }
+  const saveDebounceRef = useRef({});
+  const saveFreeCard = (card) => {
+    // Debounce — only write to Supabase 500ms after last update for this card
+    if (saveDebounceRef.current[card.id]) clearTimeout(saveDebounceRef.current[card.id]);
+    saveDebounceRef.current[card.id] = setTimeout(async () => {
+      delete saveDebounceRef.current[card.id];
+      if (supabase) {
+        const { error } = await supabase.from("free_cards").upsert({ id: card.id, session_id: sessionId, content: card.content, author: card.author, color: card.color, x: card.x, y: card.y });
+        if (error) console.warn("save free_card:", error.message);
+      }
+    }, 500);
   };
   const deleteFreeCardRemote = async (cardId) => {
     if (supabase) await supabase.from("free_cards").delete().eq("id", cardId);
@@ -1034,19 +1047,28 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
     setFreeCards(prev => [...prev, newCard]);
     saveFreeCard(newCard);
   };
-  const handleDragStart = (e, cardId) => { const card = freeCards.find(c => c.id === cardId); if (!card) return; dragState.current = { cardId, startX: e.clientX, startY: e.clientY, origX: card.x, origY: card.y }; window.addEventListener("mousemove", handleDragMove); window.addEventListener("mouseup", handleDragEnd); };
-  const handleDragMove = e => { const d = dragState.current; if (!d) return; const dx = e.clientX - d.startX, dy = e.clientY - d.startY; setFreeCards(cs => cs.map(c => c.id === d.cardId ? { ...c, x: Math.max(0, d.origX + dx), y: Math.max(0, d.origY + dy) } : c)); };
-  const handleDragEnd = () => {
+  // Use refs for drag handlers to avoid stale closure issues
+  const dragHandlers = useRef({});
+  dragHandlers.current.move = (e) => {
+    const d = dragState.current; if (!d) return;
+    const dx = e.clientX - d.startX, dy = e.clientY - d.startY;
+    setFreeCards(cs => cs.map(c => c.id === d.cardId ? { ...c, x: Math.max(0, d.origX + dx), y: Math.max(0, d.origY + dy) } : c));
+  };
+  dragHandlers.current.end = () => {
     if (!dragState.current) return;
     const d = dragState.current;
-    setFreeCards(cs => {
-      const card = cs.find(c => c.id === d.cardId);
-      if (card) saveFreeCard(card);
-      return cs;
-    });
+    setFreeCards(cs => { const card = cs.find(c => c.id === d.cardId); if (card) saveFreeCard(card); return cs; });
     dragState.current = null;
-    window.removeEventListener("mousemove", handleDragMove);
-    window.removeEventListener("mouseup", handleDragEnd);
+    window.removeEventListener("mousemove", dragHandlers.current.move);
+    window.removeEventListener("mouseup", dragHandlers.current.end);
+  };
+  const handleDragMove = (e) => dragHandlers.current.move(e);
+  const handleDragEnd = () => dragHandlers.current.end();
+  const handleDragStart = (e, cardId) => {
+    const card = freeCards.find(c => c.id === cardId); if (!card) return;
+    dragState.current = { cardId, startX: e.clientX, startY: e.clientY, origX: card.x, origY: card.y };
+    window.addEventListener("mousemove", dragHandlers.current.move);
+    window.addEventListener("mouseup", dragHandlers.current.end);
   };
   const handleEditCard = (cardId, newText) => {
     setFreeCards(cs => {
@@ -1175,7 +1197,21 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
           </div>
         </div>
 
-        {!revealed && isFacilitator && (
+        {loading && (
+          <div style={{ display: "flex", gap: 16, marginBottom: 24 }}>
+            {[1,2,3,4].map(i => (
+              <div key={i} style={{ width: 300, flexShrink: 0 }}>
+                <div style={{ height: 48, background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "10px 10px 0 0", marginBottom: 0 }} />
+                <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderTop: "none", borderRadius: "0 0 10px 10px", padding: 10, display: "flex", flexDirection: "column", gap: 8, minHeight: 160 }}>
+                  {[1,2].map(j => (
+                    <div key={j} style={{ height: 72, background: "var(--bg-raised)", borderRadius: 8, animation: "shimmer 1.4s ease-in-out infinite", backgroundImage: "linear-gradient(90deg, var(--bg-raised) 0%, var(--bg-hover) 50%, var(--bg-raised) 100%)", backgroundSize: "200% 100%" }} />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {!loading && !revealed && isFacilitator && (
           <div style={{ background: "rgba(245,158,11,.05)", border: "1px solid rgba(245,158,11,.15)", borderRadius: 8, padding: "9px 14px", marginBottom: 16, fontSize: 13, color: "#fbbf24" }}>
             🔒 Cards are hidden. Click <strong>Reveal Cards</strong> to show responses.
           </div>
