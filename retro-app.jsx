@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL || "";
-const SUPABASE_ANON_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY || "";
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 const supabase = SUPABASE_URL && SUPABASE_ANON_KEY ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 console.log("[RetroKit] Supabase URL:", SUPABASE_URL ? SUPABASE_URL.slice(0,30)+"..." : "MISSING");
 console.log("[RetroKit] Supabase key:", SUPABASE_ANON_KEY ? "present ("+SUPABASE_ANON_KEY.length+" chars)" : "MISSING");
@@ -28,8 +28,8 @@ const EMOJIS = ["🚀","🔥","💪","🎯","⚡","😤","😅","🌊","🐛","�
 const CARD_COLORS = ["#E8003D","#10b981","#6366f1","#f59e0b","#ec4899","#06b6d4","#8b5cf6","#14b8a6"];
 const AVATAR_COLORS = ["#E8003D","#6366f1","#10b981","#f59e0b","#ec4899","#06b6d4","#8b5cf6","#14b8a6"];
 
-const TENOR_KEY = process.env.REACT_APP_TENOR_KEY || "AIzaSyAyimkuYQYF_FXVALexPuGQctUWRURdCDY";
-const GIPHY_KEY = process.env.REACT_APP_GIPHY_KEY || "Lat2X82BQoZI8UZnG0cHU2QnlITbWYr3";
+const TENOR_KEY = import.meta.env.VITE_TENOR_KEY || "AIzaSyAyimkuYQYF_FXVALexPuGQctUWRURdCDY";
+const GIPHY_KEY = import.meta.env.VITE_GIPHY_KEY || "Lat2X82BQoZI8UZnG0cHU2QnlITbWYr3";
 
 function randomColor() { return CARD_COLORS[Math.floor(Math.random() * CARD_COLORS.length)]; }
 function uid() { return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2, 9); }
