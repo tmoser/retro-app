@@ -882,11 +882,18 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
   const subscribedRef = useRef(false);
 
   // Helper: map a submission row to card objects
-  const subToCards = sub => Object.entries(sub.answers || {}).filter(([, val]) => val).map(([qId, content]) => ({
-    id: uid(), qId, content, author: sub.name,
-    color: CARD_COLORS[Math.floor(Math.random() * CARD_COLORS.length)],
-    groupId: null, type: qId === "q1" ? "emoji" : "text"
-  }));
+  // Uses stable IDs based on submission id + qId so React doesn't re-create on every real-time update
+  const subToCards = (sub) => {
+    const colorIndex = sub.id ? sub.id.charCodeAt(0) % CARD_COLORS.length : Math.floor(Math.random() * CARD_COLORS.length);
+    return Object.entries(sub.answers || {}).filter(([, val]) => val).map(([qId, content]) => ({
+      id: `${sub.id}_${qId}`, // stable ID
+      qId, content, author: sub.name,
+      color: CARD_COLORS[colorIndex],
+      groupId: null, type: qId === "q1" ? "emoji" : "text"
+    }));
+  };
+  const subToCardsRef = useRef(subToCards);
+  subToCardsRef.current = subToCards; // always up to date inside closures
 
   // Load all data + set up real-time subscriptions
   useEffect(() => {
@@ -914,7 +921,7 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
       supabase.from("session_state").select("*").eq("session_id", sessionId).single(),
     ]).then(([subs, fcs, vts, acts, state]) => {
       if (subs.data?.length) {
-        setCards(subs.data.flatMap(subToCards));
+        setCards(subs.data.flatMap(s => subToCardsRef.current(s)));
         setSubmittedNames([...new Set(subs.data.map(s => s.name).filter(Boolean))]);
       }
       if (fcs.data) setFreeCards(fcs.data.map(r => ({ id: r.id, content: r.content, author: r.author, color: r.color, x: r.x, y: r.y })));
@@ -933,13 +940,13 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
     const dbChannel = supabase.channel(`db-${sessionId}`)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "submissions", filter: `session_id=eq.${sessionId}` }, payload => {
         const s = payload.new;
-        setCards(prev => [...prev.filter(c => c.author !== s.name), ...subToCards(s)]);
+        setCards(prev => [...prev.filter(c => c.author !== s.name), ...subToCardsRef.current(s)]);
         setSubmittedNames(prev => [...new Set([...prev, s.name])]);
         setHasNewSubmissions(true); onNewSubmissions?.();
       })
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "submissions", filter: `session_id=eq.${sessionId}` }, payload => {
         const s = payload.new;
-        setCards(prev => [...prev.filter(c => c.author !== s.name), ...subToCards(s)]);
+        setCards(prev => [...prev.filter(c => c.author !== s.name), ...subToCardsRef.current(s)]);
       })
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "session_state", filter: `session_id=eq.${sessionId}` }, payload => {
         const revealed = payload.new.revealed;
@@ -1637,14 +1644,16 @@ export default function App() {
 
   const [view, setView] = useState(() => {
     try {
-      // Try URL param first, then fall back to most recent session in localStorage
       const params = new URLSearchParams(window.location.search);
       const sid = params.get("session") || (() => {
         const sessions = JSON.parse(localStorage.getItem("rk_sessions_v2") || "[]");
         return sessions.length ? sessions[sessions.length - 1].id : null;
       })();
       const key = sid ? `rk_tab_${sid}` : "rk_tab";
-      return localStorage.getItem(key) || "submit";
+      const saved = localStorage.getItem(key);
+      // Facilitators (password unlocked this session) default to board
+      if (!saved && facilitatorStore.is()) return "board";
+      return saved || "submit";
     } catch { return "submit"; }
   });
   const [showSettings, setShowSettings] = useState(false);
