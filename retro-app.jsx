@@ -107,25 +107,34 @@ function wipeAllData() {
     Object.keys(localStorage).filter(k => k.startsWith("rk_")).forEach(k => localStorage.removeItem(k));
     localStorage.setItem("rk_version", "2");
   } catch(e) { console.warn("wipeAllData error", e); }
+  // Also wipe all Supabase tables
+  if (supabase) {
+    ["submissions", "votes", "free_cards", "action_items", "session_state", "sessions"]
+      .forEach(table => {
+        supabase.from(table).delete().neq("id", "___never___")
+          .then(({ error }) => { if (error) console.warn(`wipeAllData ${table}:`, error.message); });
+      });
+  }
 }
 
 // Wipe all board/submission data for a given session id
 function wipeSessionData(id) {
   try {
-    // Free cards, votes
     localStorage.removeItem(`rk_free_${id}`);
     localStorage.removeItem(`rk_votes_${id}`);
     localStorage.removeItem(`rk_joined_${id}`);
-    // Submissions scoped to this session
-    Object.keys(localStorage)
-      .filter(k => k.startsWith("rk_sub_"))
-      .forEach(k => {
-        try {
-          const s = JSON.parse(localStorage.getItem(k));
-          if (s && s.sessionId === id) localStorage.removeItem(k);
-        } catch {}
-      });
+    Object.keys(localStorage).filter(k => k.startsWith("rk_sub_")).forEach(k => {
+      try { const s = JSON.parse(localStorage.getItem(k)); if (s && s.sessionId === id) localStorage.removeItem(k); } catch {}
+    });
   } catch(e) { console.warn("wipeSessionData error", e); }
+  // Also wipe from Supabase
+  if (supabase) {
+    ["submissions", "votes", "free_cards", "action_items", "session_state"]
+      .forEach(table => {
+        supabase.from(table).delete().eq("session_id", id)
+          .then(({ error }) => { if (error) console.warn(`wipeSessionData ${table}:`, error.message); });
+      });
+  }
 }
 
 // Sessions created explicitly by facilitator — no auto-default
@@ -725,7 +734,16 @@ function RichTextEditor({ value, onChange, placeholder, injectText }) {
   }, [injectText]);
   const exec = cmd => { editorRef.current.focus(); document.execCommand(cmd, false, null); syncFormats(); emitChange(); };
   const syncFormats = () => setActiveFormats({ bold: document.queryCommandState("bold"), italic: document.queryCommandState("italic"), list: document.queryCommandState("insertUnorderedList") });
-  const emitChange = () => { if (editorRef.current) onChange(editorRef.current.innerHTML); };
+  const emitChange = () => {
+    if (!editorRef.current) return;
+    // Strip wrapping <div> tags added by contentEditable
+    let html = editorRef.current.innerHTML;
+    // If content is just a single div with no formatting, unwrap it
+    if (html.startsWith("<div>") && html.endsWith("</div>") && !html.slice(5, -6).includes("<div>")) {
+      html = html.slice(5, -6);
+    }
+    onChange(html);
+  };
   const insertEmoji = emoji => { editorRef.current.focus(); document.execCommand("insertText", false, emoji); emitChange(); };
   return (
     <div className="rte-wrap">
@@ -791,7 +809,7 @@ function SubmitView({ session, questions, currentUser, joinQ1 }) {
       ))}
       <div className="submit-actions">
         {isEditing && <button className="exit-btn" onClick={handleExit}>← Exit without saving</button>}
-        <button className="submit-btn" style={{ flex: 1 }} disabled={!name.trim() || !isOpen} onClick={() => setShowConfirm(true)}>{isEditing ? "Update Responses →" : "Review & Submit →"}</button>
+        <button className="submit-btn" style={{ flex: 1 }} disabled={!name.trim() || (!isOpen && !isEditing)} onClick={() => setShowConfirm(true)}>{isEditing ? "Update Responses →" : "Review & Submit →"}</button>
       </div>
     </div>
   );
@@ -949,9 +967,29 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
         setCards(prev => [...prev.filter(c => c.author !== s.name), ...subToCardsRef.current(s)]);
       })
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "session_state", filter: `session_id=eq.${sessionId}` }, payload => {
-        const revealed = payload.new.revealed;
-        setRevealed(revealed);
-        if (revealed) setRevealKey(k => k + 1);
+        const isRevealed = payload.new.revealed;
+        setRevealed(isRevealed);
+        if (isRevealed) setRevealKey(k => k + 1);
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "session_state", filter: `session_id=eq.${sessionId}` }, payload => {
+        // Handles first reveal (upsert creates INSERT when row doesn't exist yet)
+        const isRevealed = payload.new.revealed;
+        setRevealed(isRevealed);
+        if (isRevealed) setRevealKey(k => k + 1);
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "action_items", filter: `session_id=eq.${sessionId}` }, payload => {
+        const r = payload.new;
+        setActionItems(prev => {
+          if (prev.find(i => i.id === r.id)) return prev; // already have it
+          return [...prev, { id: r.id, text: r.text, owner: r.owner, done: r.done }];
+        });
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "action_items", filter: `session_id=eq.${sessionId}` }, payload => {
+        const r = payload.new;
+        setActionItems(prev => prev.map(i => i.id === r.id ? { ...i, text: r.text, owner: r.owner, done: r.done } : i));
+      })
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "action_items", filter: `session_id=eq.${sessionId}` }, payload => {
+        setActionItems(prev => prev.filter(i => i.id !== payload.old.id));
       })
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "votes", filter: `session_id=eq.${sessionId}` }, payload => {
         const r = payload.new;
@@ -975,6 +1013,24 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
           await presenceChannel.track({ name: currentUser, joinedAt: new Date().toISOString() });
         }
       });
+
+      // Free cards real-time
+      supabase.channel(`free-cards-${sessionId}`)
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "free_cards", filter: `session_id=eq.${sessionId}` }, payload => {
+          const r = payload.new;
+          setFreeCards(prev => {
+            if (prev.find(c => c.id === r.id)) return prev;
+            return [...prev, { id: r.id, content: r.content, author: r.author, color: r.color, x: r.x, y: r.y }];
+          });
+        })
+        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "free_cards", filter: `session_id=eq.${sessionId}` }, payload => {
+          const r = payload.new;
+          setFreeCards(prev => prev.map(c => c.id === r.id ? { ...c, content: r.content, x: r.x, y: r.y } : c));
+        })
+        .on("postgres_changes", { event: "DELETE", schema: "public", table: "free_cards", filter: `session_id=eq.${sessionId}` }, payload => {
+          setFreeCards(prev => prev.filter(c => c.id !== payload.old.id));
+        })
+        .subscribe();
 
     // Broadcast channel for ephemeral reactions — same channel for send + receive
     const reactionChannel = supabase.channel(`reactions-${sessionId}`)
@@ -1146,15 +1202,21 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
   };
 
   const handleReveal = async () => {
-    setRevealed(true); setRevealKey(k => k + 1);
+    setRevealed(true); setRevealKey(k => k + 1); // optimistic local update
     if (supabase) {
-      await supabase.from("session_state").upsert({ session_id: sessionId, revealed: true, updated_at: new Date().toISOString() });
+      const { error } = await supabase.from("session_state")
+        .upsert({ session_id: sessionId, revealed: true, updated_at: new Date().toISOString() },
+          { onConflict: "session_id" });
+      if (error) console.warn("reveal error:", error.message);
     }
   };
   const handleHide = async () => {
     setRevealed(false);
     if (supabase) {
-      await supabase.from("session_state").upsert({ session_id: sessionId, revealed: false, updated_at: new Date().toISOString() });
+      const { error } = await supabase.from("session_state")
+        .upsert({ session_id: sessionId, revealed: false, updated_at: new Date().toISOString() },
+          { onConflict: "session_id" });
+      if (error) console.warn("hide error:", error.message);
     }
   };
 
@@ -1638,49 +1700,34 @@ function JoinScreen({ session, onJoin, joined, savedName }) {
 
 // ── App Shell ─────────────────────────────────────────────────────────────────
 
-export default function App() {
-  // Run one-time migration on mount
+// ── Route detection ───────────────────────────────────────────────────────────
+const isAdminRoute = () => {
+  const path = window.location.pathname;
+  return path.endsWith("/admin") || path.endsWith("/admin.html") || path.includes("/admin#");
+};
+
+// ── Admin App (facilitator only) ──────────────────────────────────────────────
+function AdminApp() {
   runMigrationIfNeeded();
-
-  const [view, setView] = useState(() => {
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const sid = params.get("session") || (() => {
-        const sessions = JSON.parse(localStorage.getItem("rk_sessions_v2") || "[]");
-        return sessions.length ? sessions[sessions.length - 1].id : null;
-      })();
-      const key = sid ? `rk_tab_${sid}` : "rk_tab";
-      const saved = localStorage.getItem(key);
-      // Facilitators (password unlocked this session) default to board
-      if (!saved && facilitatorStore.is()) return "board";
-      return saved || "submit";
-    } catch { return "submit"; }
-  });
-  const [showSettings, setShowSettings] = useState(false);
-  const [isFacilitator, setIsFacilitator] = useState(() => facilitatorStore.is());
-  const [hasNewSubmissions, setHasNewSubmissions] = useState(false);
-
+  const [unlocked, setUnlocked] = useState(() => facilitatorStore.is());
+  const [pw, setPw] = useState(""); const [pwError, setPwError] = useState(false);
   const [activeSession, setActiveSession] = useState(() => {
-    const params = new URLSearchParams(window.location.search);
-    const sid = params.get("session");
-    if (sid) {
-      const local = sessionStore.get(sid);
-      if (local) return local;
-      const sc = params.get("sc");
-      if (sc) {
-        try {
-          const session = JSON.parse(atob(sc));
-          sessionStore.save(session);
-          return session;
-        } catch(e) { console.warn("Failed to decode session config", e); }
-      }
-      return null;
-    }
     const sessions = sessionStore.list();
     return sessions.length > 0 ? sessions[sessions.length - 1] : null;
   });
+  const [allSessionsState, setAllSessionsState] = useState(() => sessionStore.list());
+  const allSessions = allSessionsState.length ? allSessionsState : sessionStore.list();
+  const [view, setView] = useState(() => {
+    try {
+      const sid = activeSession?.id;
+      const key = sid ? `rk_tab_${sid}` : "rk_tab_admin";
+      return localStorage.getItem(key) || "board";
+    } catch { return "board"; }
+  });
+  const [showSettings, setShowSettings] = useState(false);
+  const [hasNewSubmissions, setHasNewSubmissions] = useState(false);
 
-  // On mount: if no local sessions, try loading from Supabase (handles lost localStorage)
+  // Load sessions from Supabase if localStorage is empty
   useEffect(() => {
     if (sessionStore.list().length === 0 && supabase) {
       supabase.from("sessions").select("*").order("created_at", { ascending: false })
@@ -1696,54 +1743,62 @@ export default function App() {
     }
   }, []);
 
-  const [currentUser, setCurrentUser] = useState(() => {
-    if (!activeSession) return null;
-    try { return localStorage.getItem(`rk_name_${activeSession.id}`) || null; } catch(e) { console.warn(e); return null; }
-  });
-  const [joined, setJoined] = useState(() => {
-    if (!activeSession) return [];
-    try { return JSON.parse(localStorage.getItem(`rk_joined_${activeSession.id}`) || "[]"); } catch(e) { console.warn(e); return []; }
-  });
-  const [joinQ1, setJoinQ1] = useState("");
-
-  const handleJoin = (name, q1Val) => {
-    try { localStorage.setItem(`rk_name_${activeSession.id}`, name); const updated = joined.includes(name) ? joined : [...joined, name]; localStorage.setItem(`rk_joined_${activeSession.id}`, JSON.stringify(updated)); setJoined(updated); } catch(e) { console.warn(e); }
-    setCurrentUser(name); if (q1Val) setJoinQ1(q1Val);
-  };
-
   const handleSaveSettings = session => {
     setActiveSession(session);
-    setIsFacilitator(facilitatorStore.is());
     setAllSessionsState(sessionStore.list());
+    facilitatorStore.set();
   };
 
   const handleSwitchSession = session => {
     setActiveSession(session);
-    try { const name = localStorage.getItem(`rk_name_${session.id}`); setCurrentUser(name || null); setJoined(JSON.parse(localStorage.getItem(`rk_joined_${session.id}`) || "[]")); } catch(e) { console.warn(e); }
-    setView("submit");
+    setView("board");
+    try { localStorage.setItem(`rk_tab_${session.id}`, "board"); } catch {}
   };
 
   const questions = activeSession ? QUESTIONS(activeSession.sprintNumber, Q3_VARIANTS[activeSession.q3Variant ?? 0]) : [];
-  const [allSessionsState, setAllSessionsState] = useState(() => sessionStore.list());
-  const allSessions = allSessionsState.length ? allSessionsState : sessionStore.list();
 
-  // No sessions at all → show settings immediately (password first, then empty state)
-  if (!activeSession) {
-    return (
-      <>
-        <style>{css}</style>
-        <SettingsModal
-          currentSession={null}
-          onSave={session => { setActiveSession(session); setIsFacilitator(facilitatorStore.is()); }}
-          onClose={() => {}} // can't close with no session
-          onReset={() => { setActiveSession(null); setCurrentUser(null); }}
-        />
-      </>
-    );
-  }
+  const unlock = () => {
+    if (pw === SETTINGS_PASSWORD) {
+      setUnlocked(true); setPwError(false);
+      facilitatorStore.set();
+    } else setPwError(true);
+  };
 
-  const savedName = (() => { try { return localStorage.getItem(`rk_name_${activeSession.id}`) || null; } catch { return null; } })();
-  if (!currentUser) return (<><style>{css}</style><JoinScreen session={activeSession} onJoin={handleJoin} joined={joined} savedName={savedName} /></>);
+  // Password wall
+  if (!unlocked) return (
+    <>
+      <style>{css}</style>
+      <div className="join-wrap">
+        <div className="join-card">
+          <div className="join-logo"><span className="join-logo-dot" />RetroKit</div>
+          <div style={{ fontSize: 36, margin: "16px 0 8px" }}>⚙️</div>
+          <div className="join-title">Facilitator Access</div>
+          <div className="join-sub" style={{ marginBottom: 24 }}>Enter the admin password to continue.</div>
+          <input className="join-input" type="password" placeholder="Password…" value={pw}
+            onChange={e => { setPw(e.target.value); setPwError(false); }}
+            onKeyDown={e => e.key === "Enter" && unlock()} autoFocus />
+          {pwError && <div style={{ color: "#f87171", fontSize: 13, marginBottom: 8 }}>Incorrect password</div>}
+          <button className="join-btn" onClick={unlock} style={{ marginTop: 8 }}>Enter →</button>
+          <div style={{ marginTop: 20 }}>
+            <a href="/" style={{ fontSize: 12, color: "var(--text-dim)", textDecoration: "none" }}>← Back to team view</a>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+
+  // No sessions yet → show settings
+  if (!activeSession) return (
+    <>
+      <style>{css}</style>
+      <SettingsModal
+        currentSession={null}
+        onSave={session => { setActiveSession(session); setAllSessionsState(sessionStore.list()); }}
+        onClose={() => {}}
+        onReset={() => { wipeAllData(); setActiveSession(null); }}
+      />
+    </>
+  );
 
   return (
     <>
@@ -1751,33 +1806,23 @@ export default function App() {
       <div className="app">
         <nav className="nav">
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <div className="nav-brand"><span className="nav-brand-dot" />RetroKit</div>
+            <div className="nav-brand"><span className="nav-brand-dot" />RetroKit <span style={{ fontSize: 10, color: "var(--red)", fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, marginLeft: 4 }}>Admin</span></div>
             <div className="session-select-wrap">
               <select className="session-select" value={activeSession.id} onChange={e => { const s = sessionStore.get(e.target.value); if (s) handleSwitchSession(s); }}>
                 {allSessions.map(s => <option key={s.id} value={s.id}>{s.name} · Sprint {s.sprintNumber}{s.date ? ` · ${s.date}` : ""}</option>)}
               </select>
               <span className="session-select-arrow">▾</span>
             </div>
-            <div className="user-chip">
-              <div className="user-chip-dot">{currentUser[0]}</div>
-              <span className="user-chip-name">{currentUser}</span>
-              {isFacilitator && <span className="facilitator-badge" style={{ marginLeft: 4 }}>F</span>}
-              <button className="user-chip-x" onClick={() => { try { localStorage.removeItem(`rk_name_${activeSession.id}`); } catch(e) { console.warn(e); } setCurrentUser(null); }} title="Leave session">✕</button>
-            </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div className="nav-tabs">
-              {[["submit", "Submit"], ["board", "Board"]].map(([v, label]) => (
+              {[["board", "Board"], ["submit", "Preview"]].map(([v, label]) => (
                 <button key={v} className={`nav-tab ${view === v ? "active" : ""}`} onClick={() => {
-                  try {
-                    window.history.replaceState({}, "", window.location.href.split("?")[0]);
-                    const sid = activeSession?.id;
-                    if (sid) localStorage.setItem(`rk_tab_${sid}`, v);
-                  } catch(e) { console.warn(e); }
+                  try { if (activeSession?.id) localStorage.setItem(`rk_tab_${activeSession.id}`, v); } catch {}
                   setView(v);
                 }}>
                   {label}
-                  {v === "board" && hasNewSubmissions && <span className="nav-tab-dot" title="New submissions available" />}
+                  {v === "board" && hasNewSubmissions && <span className="nav-tab-dot" title="New submissions" />}
                 </button>
               ))}
               {hasNewSubmissions && (
@@ -1790,12 +1835,128 @@ export default function App() {
 
         <CountdownBar session={activeSession} />
 
-        {view === "submit" && <SubmitView session={activeSession} questions={questions} currentUser={currentUser} joinQ1={joinQ1} />}
-        {view === "board" && <BoardView session={activeSession} members={joined} questions={questions} currentUser={currentUser} onNewSubmissions={() => setHasNewSubmissions(true)} />}
+        {view === "board" && <BoardView session={activeSession} members={[]} questions={questions} currentUser="Facilitator" onNewSubmissions={() => setHasNewSubmissions(true)} />}
+        {view === "submit" && <SubmitView session={activeSession} questions={questions} currentUser="Facilitator" joinQ1="" />}
 
-
-        {showSettings && <SettingsModal currentSession={activeSession} onSave={handleSaveSettings} onClose={() => { setShowSettings(false); setIsFacilitator(facilitatorStore.is()); }} onReset={() => { wipeAllData(); setActiveSession(null); setCurrentUser(null); setShowSettings(false); }} />}
+        {showSettings && <SettingsModal
+          currentSession={activeSession}
+          onSave={handleSaveSettings}
+          onClose={() => setShowSettings(false)}
+          onReset={() => { wipeAllData(); setActiveSession(null); setShowSettings(false); }}
+        />}
       </div>
     </>
   );
+}
+
+// ── Team App (submit only) ────────────────────────────────────────────────────
+function TeamApp() {
+  runMigrationIfNeeded();
+
+  const [activeSession, setActiveSession] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sid = params.get("session");
+    if (sid) {
+      const local = sessionStore.get(sid);
+      if (local) return local;
+      const sc = params.get("sc");
+      if (sc) {
+        try { const session = JSON.parse(atob(sc)); sessionStore.save(session); return session; }
+        catch(e) { console.warn("Failed to decode session config", e); }
+      }
+      return null;
+    }
+    const sessions = sessionStore.list();
+    return sessions.length > 0 ? sessions[sessions.length - 1] : null;
+  });
+
+  // Load from Supabase if needed
+  useEffect(() => {
+    if (!activeSession && supabase) {
+      const params = new URLSearchParams(window.location.search);
+      const sid = params.get("session");
+      if (sid) {
+        supabase.from("sessions").select("*").eq("id", sid).single()
+          .then(({ data, error }) => {
+            if (error) { console.warn("load session:", error.message); return; }
+            if (data) { const s = lsSessionMap(data); sessionStore.save(s); setActiveSession(s); }
+          });
+      }
+    }
+  }, []);
+
+  const [currentUser, setCurrentUser] = useState(() => {
+    if (!activeSession) return null;
+    try { return localStorage.getItem(`rk_name_${activeSession.id}`) || null; } catch { return null; }
+  });
+  const [joined, setJoined] = useState(() => {
+    if (!activeSession) return [];
+    try { return JSON.parse(localStorage.getItem(`rk_joined_${activeSession.id}`) || "[]"); } catch { return []; }
+  });
+  const [joinQ1, setJoinQ1] = useState("");
+
+  const handleJoin = (name, q1Val) => {
+    try {
+      localStorage.setItem(`rk_name_${activeSession.id}`, name);
+      const updated = joined.includes(name) ? joined : [...joined, name];
+      localStorage.setItem(`rk_joined_${activeSession.id}`, JSON.stringify(updated));
+      setJoined(updated);
+    } catch(e) { console.warn(e); }
+    setCurrentUser(name); if (q1Val) setJoinQ1(q1Val);
+  };
+
+  const questions = activeSession ? QUESTIONS(activeSession.sprintNumber, Q3_VARIANTS[activeSession.q3Variant ?? 0]) : [];
+
+  // No session found
+  if (!activeSession) return (
+    <>
+      <style>{css}</style>
+      <div className="join-wrap">
+        <div className="join-card">
+          <div className="join-logo"><span className="join-logo-dot" />RetroKit</div>
+          <div style={{ fontSize: 40, margin: "16px 0 12px" }}>🔗</div>
+          <div className="join-title">Session not found</div>
+          <div className="join-sub">Ask your facilitator for the correct session link.</div>
+        </div>
+      </div>
+    </>
+  );
+
+  const savedName = (() => { try { return localStorage.getItem(`rk_name_${activeSession.id}`) || null; } catch { return null; } })();
+  if (!currentUser) return (
+    <>
+      <style>{css}</style>
+      <JoinScreen session={activeSession} onJoin={handleJoin} joined={joined} savedName={savedName} />
+    </>
+  );
+
+  return (
+    <>
+      <style>{css}</style>
+      <div className="app">
+        <nav className="nav">
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div className="nav-brand"><span className="nav-brand-dot" />RetroKit</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div className="user-chip">
+              <div className="user-chip-dot">{currentUser[0]}</div>
+              <span className="user-chip-name">{currentUser}</span>
+              <button className="user-chip-x" onClick={() => { try { localStorage.removeItem(`rk_name_${activeSession.id}`); } catch {} setCurrentUser(null); }} title="Leave session">✕</button>
+            </div>
+          </div>
+        </nav>
+        <CountdownBar session={activeSession} />
+        <SubmitView session={activeSession} questions={questions} currentUser={currentUser} joinQ1={joinQ1} />
+        {/* Subtle admin link */}
+        <div style={{ textAlign: "center", padding: "32px 0 16px" }}>
+          <a href="/admin" style={{ fontSize: 11, color: "var(--text-dim)", textDecoration: "none", opacity: 0.4 }}>facilitator access</a>
+        </div>
+      </div>
+    </>
+  );
+}
+
+export default function App() {
+  return isAdminRoute() ? <AdminApp /> : <TeamApp />;
 }
