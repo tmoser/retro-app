@@ -781,7 +781,13 @@ function SubmitView({ session, questions, currentUser, joinQ1 }) {
   const injectIdea = (qId, text) => { setAnswer(qId, text); setInjected(i => ({ ...i, [qId]: text })); };
   const handleSubmit = async () => {
     const token = editToken || generateEditToken();
-    await submissionsStore.save(token, { name: name.trim(), answers, sprintNumber: session.sprintNumber, sessionId: session.id, submittedAt: new Date().toISOString() });
+    try {
+      await submissionsStore.save(token, { name: name.trim(), answers, sprintNumber: session.sprintNumber, sessionId: session.id, submittedAt: new Date().toISOString() });
+    } catch(e) {
+      console.warn("submit error:", e);
+      // Save to localStorage even if Supabase fails
+      try { localStorage.setItem("rk_sub_" + token, JSON.stringify({ name: name.trim(), answers, sprintNumber: session.sprintNumber, sessionId: session.id, submittedAt: new Date().toISOString() })); } catch {}
+    }
     setEditLink({ token }); setSubmitted(true); setShowConfirm(false);
   };
   if (submitted) return <div className="submit-wrap"><div className="success-wrap"><div className="success-icon">{isEditing ? "✏️" : "🎉"}</div><h2>{isEditing ? "Responses updated!" : "You're all set!"}</h2><p>Your responses have been saved. See you at the retro!</p>{editLink && <EditLinkBox token={editLink.token} />}</div></div>;
@@ -995,6 +1001,10 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
         const r = payload.new;
         setVotes(prev => { const next = { ...prev }; if (!next[r.card_id]) next[r.card_id] = {}; next[r.card_id][r.user_name] = r.direction; return next; });
       })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "votes", filter: `session_id=eq.${sessionId}` }, payload => {
+        const r = payload.new;
+        setVotes(prev => { const next = { ...prev }; if (!next[r.card_id]) next[r.card_id] = {}; next[r.card_id][r.user_name] = r.direction; return next; });
+      })
       .on("postgres_changes", { event: "DELETE", schema: "public", table: "votes", filter: `session_id=eq.${sessionId}` }, payload => {
         const r = payload.old;
         setVotes(prev => { const next = { ...prev }; if (next[r.card_id]) delete next[r.card_id][r.user_name]; return next; });
@@ -1015,7 +1025,7 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
       });
 
       // Free cards real-time
-      supabase.channel(`free-cards-${sessionId}`)
+      const freeCardsChannel = supabase.channel(`free-cards-${sessionId}`)
         .on("postgres_changes", { event: "INSERT", schema: "public", table: "free_cards", filter: `session_id=eq.${sessionId}` }, payload => {
           const r = payload.new;
           setFreeCards(prev => {
@@ -1047,6 +1057,7 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
     return () => {
       subscribedRef.current = null; // reset so re-mount works
       supabase.removeChannel(dbChannel);
+      supabase.removeChannel(freeCardsChannel);
       presenceChannel.untrack().then(() => supabase.removeChannel(presenceChannel));
       supabase.removeChannel(reactionChannel);
       reactionChannelRef.current = null;
@@ -1835,7 +1846,7 @@ function AdminApp() {
 
         <CountdownBar session={activeSession} />
 
-        {view === "board" && <BoardView session={activeSession} members={[]} questions={questions} currentUser="Facilitator" onNewSubmissions={() => setHasNewSubmissions(true)} />}
+        {view === "board" && <BoardView session={activeSession} members={[]} questions={questions} currentUser="__facilitator__" onNewSubmissions={() => setHasNewSubmissions(true)} />}
         {view === "submit" && <SubmitView session={activeSession} questions={questions} currentUser="Facilitator" joinQ1="" />}
 
         {showSettings && <SettingsModal
