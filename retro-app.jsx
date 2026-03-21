@@ -1930,6 +1930,20 @@ function TeamApp() {
     </>
   );
 
+  const [view, setView] = useState(() => {
+    try {
+      const sid = activeSession?.id;
+      const key = sid ? `rk_tab_${sid}` : "rk_tab";
+      return localStorage.getItem(key) || "submit";
+    } catch { return "submit"; }
+  });
+  const [hasNewSubmissions, setHasNewSubmissions] = useState(false);
+
+  const saveTab = (v) => {
+    try { if (activeSession?.id) localStorage.setItem(`rk_tab_${activeSession.id}`, v); } catch {}
+    setView(v);
+  };
+
   return (
     <>
       <style>{css}</style>
@@ -1938,7 +1952,18 @@ function TeamApp() {
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div className="nav-brand"><span className="nav-brand-dot" />RetroKit</div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div className="nav-tabs">
+              {[["submit", "Submit"], ["board", "Board"]].map(([v, label]) => (
+                <button key={v} className={`nav-tab ${view === v ? "active" : ""}`} onClick={() => saveTab(v)}>
+                  {label}
+                  {v === "board" && hasNewSubmissions && <span className="nav-tab-dot" title="New submissions" />}
+                </button>
+              ))}
+              {hasNewSubmissions && (
+                <button className="refresh-btn" onClick={() => { setHasNewSubmissions(false); setView("board"); }} title="Refresh board">↻</button>
+              )}
+            </div>
             <div className="user-chip">
               <div className="user-chip-dot">{currentUser[0]}</div>
               <span className="user-chip-name">{currentUser}</span>
@@ -1947,7 +1972,8 @@ function TeamApp() {
           </div>
         </nav>
         <CountdownBar session={activeSession} />
-        <SubmitView session={activeSession} questions={questions} currentUser={currentUser} joinQ1={joinQ1} />
+        {view === "submit" && <SubmitView session={activeSession} questions={questions} currentUser={currentUser} joinQ1={joinQ1} />}
+        {view === "board" && <BoardView session={activeSession} members={joined} questions={questions} currentUser={currentUser} onNewSubmissions={() => setHasNewSubmissions(true)} />}
         {/* Subtle admin link */}
         <div style={{ textAlign: "center", padding: "32px 0 16px" }}>
           <a href="#admin" style={{ fontSize: 11, color: "var(--text-dim)", textDecoration: "none", opacity: 0.4 }}>facilitator access</a>
