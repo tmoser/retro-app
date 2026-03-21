@@ -1702,8 +1702,8 @@ function JoinScreen({ session, onJoin, joined, savedName }) {
 
 // ── Route detection ───────────────────────────────────────────────────────────
 const isAdminRoute = () => {
-  const path = window.location.pathname;
-  return path.endsWith("/admin") || path.endsWith("/admin.html") || path.includes("/admin#");
+  // Use hash-based routing since GitHub Pages can't serve arbitrary paths
+  return window.location.hash === "#admin" || window.location.hash.startsWith("#admin?");
 };
 
 // ── Admin App (facilitator only) ──────────────────────────────────────────────
@@ -1780,7 +1780,7 @@ function AdminApp() {
           {pwError && <div style={{ color: "#f87171", fontSize: 13, marginBottom: 8 }}>Incorrect password</div>}
           <button className="join-btn" onClick={unlock} style={{ marginTop: 8 }}>Enter →</button>
           <div style={{ marginTop: 20 }}>
-            <a href="/" style={{ fontSize: 12, color: "var(--text-dim)", textDecoration: "none" }}>← Back to team view</a>
+            <a href="#" style={{ fontSize: 12, color: "var(--text-dim)", textDecoration: "none" }}>← Back to team view</a>
           </div>
         </div>
       </div>
@@ -1950,7 +1950,7 @@ function TeamApp() {
         <SubmitView session={activeSession} questions={questions} currentUser={currentUser} joinQ1={joinQ1} />
         {/* Subtle admin link */}
         <div style={{ textAlign: "center", padding: "32px 0 16px" }}>
-          <a href="/admin" style={{ fontSize: 11, color: "var(--text-dim)", textDecoration: "none", opacity: 0.4 }}>facilitator access</a>
+          <a href="#admin" style={{ fontSize: 11, color: "var(--text-dim)", textDecoration: "none", opacity: 0.4 }}>facilitator access</a>
         </div>
       </div>
     </>
@@ -1958,5 +1958,11 @@ function TeamApp() {
 }
 
 export default function App() {
-  return isAdminRoute() ? <AdminApp /> : <TeamApp />;
+  const [hash, setHash] = useState(() => window.location.hash);
+  useEffect(() => {
+    const onHash = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  return (hash === "#admin" || hash.startsWith("#admin?")) ? <AdminApp /> : <TeamApp />;
 }
