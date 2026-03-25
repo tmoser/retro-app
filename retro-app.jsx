@@ -236,7 +236,7 @@ const css = `
   .sub-chip-dot { width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; color: white; flex-shrink: 0; }
 
   .session-select-wrap { position: relative; }
-  .session-select { background: var(--bg-raised); border: 1px solid var(--border-light); border-radius: var(--radius); color: var(--text); font-family: inherit; font-size: 13px; font-weight: 500; padding: 5px 28px 5px 10px; cursor: pointer; outline: none; appearance: none; -webkit-appearance: none; max-width: 200px; }
+  .session-select { background: var(--bg-raised); border: 1px solid var(--border-light); border-radius: var(--radius); color: var(--text); font-family: inherit; font-size: 13px; font-weight: 500; padding: 5px 28px 5px 10px; cursor: pointer; outline: none; appearance: none; -webkit-appearance: none; max-width: 320px; min-width: 160px; }
   .session-select:focus { border-color: var(--border-focus); }
   .session-select-arrow { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--text-muted); font-size: 10px; }
 
@@ -490,7 +490,7 @@ const css = `
   .col { width: 300px; flex-shrink: 0; }
   .col-header { border-radius: var(--radius-lg) var(--radius-lg) 0 0; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; border-left: 3px solid transparent; }
   .col-header-title { font-size: 12px; font-weight: 600; color: var(--text-muted); line-height: 1.4; letter-spacing: .01em; }
-  .col-body { background: var(--bg-card); border-radius: 0 0 var(--radius-lg) var(--radius-lg); padding: 10px; min-height: 200px; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border); border-top: none; }
+  .col-body { background: var(--bg-card); border-radius: 0 0 var(--radius-lg) var(--radius-lg); padding: 10px; min-height: 280px; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border); border-top: none; }
 
   /* Refined sticky cards — white/light with color bar */
   .sticky { border-radius: var(--radius); padding: 12px 14px; background: #1e2333; border: 1px solid var(--border-light); border-left: 3px solid #555; cursor: pointer; transition: all .15s; position: relative; }
@@ -1012,17 +1012,18 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
       .subscribe();
 
     // Presence channel — who's on the board right now
-    const presenceChannel = supabase.channel(`presence-${sessionId}`, { config: { presence: { key: currentUser } } })
+    const presenceChannel = supabase.channel(`presence-${sessionId}`, { config: { presence: { key: currentUser || "anon" } } })
       .on("presence", { event: "sync" }, () => {
         const state = presenceChannel.presenceState();
         const names = Object.values(state).flat().map(p => p.name).filter(Boolean);
         setLivePresence([...new Set(names)]);
       })
       .subscribe(async status => {
-        if (status === "SUBSCRIBED") {
+        if (status === "SUBSCRIBED" && currentUser) {
           await presenceChannel.track({ name: currentUser, joinedAt: new Date().toISOString() });
         }
       });
+    presenceChannelRef.current = presenceChannel;
 
       // Free cards real-time
       const freeCardsChannel = supabase.channel(`free-cards-${sessionId}`)
@@ -1058,13 +1059,22 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
       subscribedRef.current = null; // reset so re-mount works
       supabase.removeChannel(dbChannel);
       supabase.removeChannel(freeCardsChannel);
-      presenceChannel.untrack().then(() => supabase.removeChannel(presenceChannel));
+      if (presenceChannelRef.current) presenceChannelRef.current.untrack().then(() => supabase.removeChannel(presenceChannelRef.current));
       supabase.removeChannel(reactionChannel);
       reactionChannelRef.current = null;
+      presenceChannelRef.current = null;
     };
-  }, [sessionId, currentUser]);
+  }, [sessionId]); // currentUser intentionally excluded — presence re-tracks via ref
 
   const reactionChannelRef = useRef(null);
+  const presenceChannelRef = useRef(null);
+
+  // Re-track presence when currentUser changes without re-subscribing everything
+  useEffect(() => {
+    if (currentUser && presenceChannelRef.current) {
+      presenceChannelRef.current.track({ name: currentUser, joinedAt: new Date().toISOString() });
+    }
+  }, [currentUser]);
 
   const cardsWithVotes = cards.map(c => ({ ...c, votes: votes[c.id] || {} }));
 
@@ -1345,7 +1355,7 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
               <div style={{ background: "var(--bg-card)", borderTop: "2px solid var(--border-focus)", border: "1px solid var(--border)", borderBottom: "none", borderRadius: "10px 10px 0 0", padding: "12px 14px" }}>
                 <div className="col-header-title">✅ Action Items</div>
               </div>
-              <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderTop: "none", borderRadius: "0 0 10px 10px", padding: 10, minHeight: 200, display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderTop: "none", borderRadius: "0 0 10px 10px", padding: 10, minHeight: 280, display: "flex", flexDirection: "column", gap: 6 }}>
                 {actionItems.map(item => (
                   <div key={item.id} style={{ background: item.done ? "rgba(16,185,129,.05)" : "var(--bg-raised)", border: `1px solid ${item.done ? "rgba(16,185,129,.2)" : "var(--border-light)"}`, borderRadius: 7, padding: "9px 11px", display: "flex", flexDirection: "column", gap: 4 }}>
                     <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
@@ -1735,7 +1745,7 @@ function AdminApp() {
       return localStorage.getItem(key) || "board";
     } catch { return "board"; }
   });
-  const [showSettings, setShowSettings] = useState(false);
+  const [showSettings, setShowSettings] = useState(true); // open sessions list by default
   const [hasNewSubmissions, setHasNewSubmissions] = useState(false);
 
   // Load sessions from Supabase if localStorage is empty
@@ -1918,7 +1928,22 @@ function TeamApp() {
 
   const questions = activeSession ? QUESTIONS(activeSession.sprintNumber, Q3_VARIANTS[activeSession.q3Variant ?? 0]) : [];
 
-  // No session found
+  // ALL hooks must come before any conditional returns
+  const [view, setView] = useState(() => {
+    try {
+      const sid = activeSession?.id;
+      const key = sid ? `rk_tab_${sid}` : "rk_tab";
+      return localStorage.getItem(key) || "submit";
+    } catch { return "submit"; }
+  });
+  const [hasNewSubmissions, setHasNewSubmissions] = useState(false);
+
+  const saveTab = (v) => {
+    try { if (activeSession?.id) localStorage.setItem(`rk_tab_${activeSession.id}`, v); } catch {}
+    setView(v);
+  };
+
+  // Conditional renders AFTER all hooks
   if (!activeSession) return (
     <>
       <style>{css}</style>
@@ -1940,20 +1965,6 @@ function TeamApp() {
       <JoinScreen session={activeSession} onJoin={handleJoin} joined={joined} savedName={savedName} />
     </>
   );
-
-  const [view, setView] = useState(() => {
-    try {
-      const sid = activeSession?.id;
-      const key = sid ? `rk_tab_${sid}` : "rk_tab";
-      return localStorage.getItem(key) || "submit";
-    } catch { return "submit"; }
-  });
-  const [hasNewSubmissions, setHasNewSubmissions] = useState(false);
-
-  const saveTab = (v) => {
-    try { if (activeSession?.id) localStorage.setItem(`rk_tab_${activeSession.id}`, v); } catch {}
-    setView(v);
-  };
 
   return (
     <>
