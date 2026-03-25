@@ -1151,12 +1151,11 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
     window.addEventListener("mouseup", dragHandlers.current.end);
   };
   const handleEditCard = (cardId, newText) => {
-    setFreeCards(cs => {
-      const updated = cs.map(c => c.id === cardId ? { ...c, content: newText } : c);
-      const card = updated.find(c => c.id === cardId);
-      if (card) saveFreeCard(card);
-      return updated;
-    });
+    // Update local state
+    setFreeCards(cs => cs.map(c => c.id === cardId ? { ...c, content: newText } : c));
+    // Save to Supabase — build card object directly to avoid stale closure
+    const existingCard = freeCards.find(c => c.id === cardId);
+    if (existingCard) saveFreeCard({ ...existingCard, content: newText });
   };
   const handleDeleteCard = (cardId) => {
     setFreeCards(cs => cs.filter(c => c.id !== cardId));
