@@ -1,4 +1,12 @@
 import { useState, useEffect, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+const supabase = SUPABASE_URL && SUPABASE_ANON_KEY ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+console.log("[RetroKit] Supabase URL:", SUPABASE_URL ? SUPABASE_URL.slice(0,30)+"..." : "MISSING");
+console.log("[RetroKit] Supabase key:", SUPABASE_ANON_KEY ? "present ("+SUPABASE_ANON_KEY.length+" chars)" : "MISSING");
+console.log("[RetroKit] Supabase client:", supabase ? "OK" : "NULL - localStorage fallback only");
 
 // ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -9,542 +17,563 @@ const Q3_VARIANTS = [
   "If you could change one thing about how we work, what would it be?",
 ];
 
-const QUESTIONS = (sprintNumber) => [
-  { id: "q1", label: "Q1", prompt: "Describe the sprint using an emoji or gif", type: "emoji", color: "#FFD93D" },
-  { id: "q2", label: "Q2", prompt: "What were our standout achievements this sprint?", type: "text", color: "#6BCB77" },
-  { id: "q3", label: "Q3", prompt: Q3_VARIANTS[Math.floor((sprintNumber - 1) / 2) % Q3_VARIANTS.length], type: "text", color: "#FF6B6B" },
-  { id: "q4", label: "Q4", prompt: "Anything else? Is there anyone you'd like to give a shout-out to?", type: "text", color: "#4D96FF" },
+const QUESTIONS = (sprintNumber, q3Override) => [
+  { id: "q1", label: "Q1", prompt: "Describe the sprint using an emoji or gif", type: "emoji", color: "#E8003D" },
+  { id: "q2", label: "Q2", prompt: "What were our standout achievements this sprint?", type: "text", color: "#10b981" },
+  { id: "q3", label: "Q3", prompt: q3Override || Q3_VARIANTS[Math.floor((sprintNumber - 1) / 2) % Q3_VARIANTS.length], type: "text", color: "#6366f1" },
+  { id: "q4", label: "Q4", prompt: "Anything else? Is there anyone you'd like to give a shout-out to?", type: "text", color: "#f59e0b" },
 ];
 
 const EMOJIS = ["🚀","🔥","💪","🎯","⚡","😤","😅","🌊","🐛","🎉","💡","🧠","🤝","🌱","🏆","😬","🙌","💥","🌀","🎸"];
+const CARD_COLORS = ["#E8003D","#10b981","#6366f1","#f59e0b","#ec4899","#06b6d4","#8b5cf6","#14b8a6"];
+const AVATAR_COLORS = ["#E8003D","#6366f1","#10b981","#f59e0b","#ec4899","#06b6d4","#8b5cf6","#14b8a6"];
 
-const CARD_COLORS = ["#FFD93D","#6BCB77","#FF6B6B","#4D96FF","#C77DFF","#FF9F43","#48DBFB","#FF6B9D"];
+const TENOR_KEY = import.meta.env.VITE_TENOR_KEY || "AIzaSyAyimkuYQYF_FXVALexPuGQctUWRURdCDY";
+const GIPHY_KEY = import.meta.env.VITE_GIPHY_KEY || "Lat2X82BQoZI8UZnG0cHU2QnlITbWYr3";
 
 function randomColor() { return CARD_COLORS[Math.floor(Math.random() * CARD_COLORS.length)]; }
-function uid() { return Math.random().toString(36).slice(2, 9); }
+function uid() { return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2, 9); }
+
+// ── Facilitator detection (sessionStorage = per tab, not permanent) ────────────
+
+const facilitatorStore = {
+  set() { try { sessionStorage.setItem("rk_facilitator", "1"); } catch(e) { console.warn(e); } },
+  clear() { try { sessionStorage.removeItem("rk_facilitator"); } catch(e) { console.warn(e); } },
+  is() { try { return sessionStorage.getItem("rk_facilitator") === "1"; } catch(e) { return false; } }
+};
+
+// ── Session Store ─────────────────────────────────────────────────────────────
+
+const LS_KEY = "rk_sessions_v2";
+
+// Local helpers
+function lsSessions() { try { return JSON.parse(localStorage.getItem(LS_KEY) || "[]"); } catch { return []; } }
+function lsSessionMap(s) { return { id: s.id, name: s.name, sprintNumber: s.sprint_number ?? s.sprintNumber, date: s.date || "", cutoffDate: s.cutoff_date ?? s.cutoffDate ?? "", cutoffTime: s.cutoff_time ?? s.cutoffTime ?? "", q3Variant: s.q3_variant ?? s.q3Variant ?? 0, allowReactions: s.allow_reactions ?? s.allowReactions ?? false, allowVoting: s.allow_voting ?? s.allowVoting ?? false }; }
+
+const sessionStore = {
+  list() { return lsSessions(); },
+  get(id) { return lsSessions().find(s => s.id === id) || null; },
+  save(session) {
+    try {
+      const all = lsSessions();
+      const idx = all.findIndex(s => s.id === session.id);
+      if (idx >= 0) all[idx] = session; else all.push(session);
+      localStorage.setItem(LS_KEY, JSON.stringify(all));
+    } catch(e) { console.warn(e); }
+    // Save to Supabase so any browser can find it
+    if (supabase) {
+      supabase.from("sessions").upsert({
+        id: session.id, name: session.name, sprint_number: session.sprintNumber,
+        date: session.date || null, cutoff_date: session.cutoffDate || null,
+        cutoff_time: session.cutoffTime || null, q3_variant: session.q3Variant ?? 0,
+        allow_reactions: session.allowReactions ?? false, allow_voting: session.allowVoting ?? false
+      }).then(({ error }) => { if (error) console.warn("session save:", error.message); });
+    }
+  },
+  delete(id) {
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify(lsSessions().filter(s => s.id !== id)));
+    } catch(e) { console.warn(e); }
+    if (supabase) supabase.from("sessions").delete().eq("id", id).then(({ error }) => { if (error) console.warn("session delete:", error.message); });
+  },
+  getSessionUrl(id) {
+    const base = window.location.origin + window.location.pathname.replace(/\?.*$/, "");
+    const s = sessionStore.get(id);
+    if (!s) return `${base}?session=${id}`;
+    // Encode minimal session config so team members can bootstrap in a fresh browser
+    const payload = btoa(JSON.stringify({ id: s.id, name: s.name, sprintNumber: s.sprintNumber, date: s.date, cutoffDate: s.cutoffDate, cutoffTime: s.cutoffTime, q3Variant: s.q3Variant, allowReactions: s.allowReactions, allowVoting: s.allowVoting }));
+    return `${base}?session=${id}&sc=${payload}`;
+  },
+  getCutoff(session) {
+    if (!session?.cutoffDate || !session?.cutoffTime) return null;
+    const dt = new Date(`${session.cutoffDate}T${session.cutoffTime}`);
+    return isNaN(dt.getTime()) ? null : dt;
+  },
+  isSubmissionOpen(session) { const c = sessionStore.getCutoff(session); return c ? Date.now() < c.getTime() : true; }
+};
+
+// One-time migration: clear stale rk_ data on first v2 load
+function runMigrationIfNeeded() {
+  try {
+    // Just stamp the version — never wipe data on load
+    // (wiping is only done explicitly via "Reset all data" button)
+    localStorage.setItem("rk_version", "2");
+  } catch(e) { console.warn("migration error", e); }
+}
+
+// Wipe everything — facilitator reset
+function wipeAllData() {
+  try {
+    Object.keys(localStorage).filter(k => k.startsWith("rk_")).forEach(k => localStorage.removeItem(k));
+    localStorage.setItem("rk_version", "2");
+  } catch(e) { console.warn("wipeAllData error", e); }
+  // Also wipe all Supabase tables
+  if (supabase) {
+    ["submissions", "votes", "free_cards", "action_items", "session_state", "sessions"]
+      .forEach(table => {
+        supabase.from(table).delete().neq("id", "___never___")
+          .then(({ error }) => { if (error) console.warn(`wipeAllData ${table}:`, error.message); });
+      });
+  }
+}
+
+// Wipe all board/submission data for a given session id
+function wipeSessionData(id) {
+  try {
+    localStorage.removeItem(`rk_free_${id}`);
+    localStorage.removeItem(`rk_votes_${id}`);
+    localStorage.removeItem(`rk_joined_${id}`);
+    Object.keys(localStorage).filter(k => k.startsWith("rk_sub_")).forEach(k => {
+      try { const s = JSON.parse(localStorage.getItem(k)); if (s && s.sessionId === id) localStorage.removeItem(k); } catch {}
+    });
+  } catch(e) { console.warn("wipeSessionData error", e); }
+  // Also wipe from Supabase
+  if (supabase) {
+    ["submissions", "votes", "free_cards", "action_items", "session_state"]
+      .forEach(table => {
+        supabase.from(table).delete().eq("session_id", id)
+          .then(({ error }) => { if (error) console.warn(`wipeSessionData ${table}:`, error.message); });
+      });
+  }
+}
+
+// Sessions created explicitly by facilitator — no auto-default
 
 // ── Countdown ─────────────────────────────────────────────────────────────────
 
-// Demo cutoff: set to 2h 17m from whenever the page loads, so it's always live.
-// In production replace this with a real fixed datetime.
-const DEMO_CUTOFF = new Date(Date.now() + (2 * 60 + 17) * 60 * 1000);
-
 function useCountdown(cutoff) {
-  const [ms, setMs] = useState(() => cutoff - Date.now());
+  const [ms, setMs] = useState(() => cutoff ? cutoff.getTime() - Date.now() : null);
   useEffect(() => {
-    const id = setInterval(() => setMs(cutoff - Date.now()), 1000);
+    if (!cutoff) { setMs(null); return; }
+    const id = setInterval(() => setMs(cutoff.getTime() - Date.now()), 1000);
     return () => clearInterval(id);
   }, [cutoff]);
   return ms;
 }
 
-function relaxedLabel(ms) {
-  if (ms <= 0) return { text: "Submissions closed", state: "closed" };
-  const totalMin = Math.floor(ms / 60000);
-  const hrs = Math.floor(totalMin / 60);
-  const mins = totalMin % 60;
-  if (totalMin <= 5)  return { text: "Closing any moment now", state: "urgent" };
-  if (totalMin <= 15) return { text: `Closes in ${totalMin} minutes`, state: "urgent" };
-  if (totalMin <= 45) return { text: `About ${mins > 30 ? hrs + 1 : hrs ? hrs + "h " : ""}${mins > 0 && !hrs ? mins + " min" : mins > 30 ? "" : mins + " min"} left`, state: "soon" };
-  if (hrs === 0)      return { text: `Closes in about ${mins} minutes`, state: "soon" };
-  if (hrs === 1)      return { text: mins < 30 ? "About an hour left" : "Closes in about 1.5 hours", state: "open" };
-  return { text: `Closes in about ${hrs} hour${hrs > 1 ? "s" : ""}`, state: "open" };
-}
-
 function exactTime(ms) {
-  if (ms <= 0) return "00:00:00";
+  if (ms === null || ms <= 0) return ms === null ? "—" : "00:00:00";
   const totalSec = Math.floor(ms / 1000);
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
+  const h = Math.floor(totalSec / 3600), m = Math.floor((totalSec % 3600) / 60), s = totalSec % 60;
   return [h, m, s].map(n => String(n).padStart(2, "0")).join(":");
 }
 
-function CountdownBar({ cutoff }) {
+function getCountdownState(ms) {
+  if (ms === null) return "open";
+  if (ms <= 0) return "closed";
+  if (Math.floor(ms / 60000) <= 15) return "urgent";
+  if (Math.floor(ms / 60000) <= 45) return "soon";
+  return "open";
+}
+
+function CountdownBar({ session }) {
+  const cutoff = sessionStore.getCutoff(session);
   const ms = useCountdown(cutoff);
-  const { state } = relaxedLabel(ms);
+  const state = getCountdownState(ms);
   const exact = exactTime(ms);
+  if (ms === null) return null;
   return (
-    <div className={`countdown-bar ${state}`}>
-      <span className="countdown-bar-dot" />
-      <span className="countdown-bar-label">Submissions close in</span>
-      <span className="countdown-bar-time">{exact}</span>
+    <div className={`countdown-bar state-${state}`}>
+      <span className="countdown-dot" />
+      <span className="countdown-label">Submissions close in</span>
+      <span className="countdown-time">{exact}</span>
     </div>
   );
 }
 
 // ── Seed Data ─────────────────────────────────────────────────────────────────
 
-function seedCards(sprintNum) {
-  const q = QUESTIONS(sprintNum);
-  return [
-    { id: uid(), qId: "q1", content: "🚀", type: "emoji", author: "Alex", color: "#FFD93D", groupId: null },
-    { id: uid(), qId: "q1", content: "💪", type: "emoji", author: "Sam", color: "#FFD93D", groupId: null },
-    { id: uid(), qId: "q1", content: "🌊", type: "emoji", author: "Jordan", color: "#FFD93D", groupId: null },
-    { id: uid(), qId: "q2", content: "Shipped the new dashboard on time despite scope changes", author: "Alex", color: "#6BCB77", groupId: null },
-    { id: uid(), qId: "q2", content: "Great cross-team collaboration with design on the component library", author: "Sam", color: "#6BCB77", groupId: null },
-    { id: uid(), qId: "q2", content: "Zero P1 bugs in production this sprint!", author: "Jordan", color: "#6BCB77", groupId: null },
-    { id: uid(), qId: "q2", content: "Finally got CI/CD pipeline under 8 minutes", author: "Riley", color: "#6BCB77", groupId: null },
-    { id: uid(), qId: "q3", content: "START: Weekly async design reviews so we catch issues earlier", author: "Sam", color: "#FF6B6B", groupId: null },
-    { id: uid(), qId: "q3", content: "STOP: Unplanned interruptions during focus blocks", author: "Alex", color: "#FF6B6B", groupId: null },
-    { id: uid(), qId: "q3", content: "CONTINUE: Daily standups are tight and useful", author: "Jordan", color: "#FF6B6B", groupId: null },
-    { id: uid(), qId: "q3", content: "START: Proper ticket grooming before sprint planning", author: "Riley", color: "#FF6B6B", groupId: null },
-    { id: uid(), qId: "q4", content: "Shoutout to Riley for staying late to fix the auth bug — real hero behavior 🦸", author: "Alex", color: "#4D96FF", groupId: null },
-    { id: uid(), qId: "q4", content: "Big thanks to Sam for the thorough PR reviews this sprint", author: "Jordan", color: "#4D96FF", groupId: null },
-  ];
-}
+
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const css = `
-  @import url('https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@400;600;700;800&family=DM+Sans:wght@400;500;600&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
   :root {
-    --or-red: #E8003D;
-    --or-red-dark: #c0002f;
-    --or-red-glow: rgba(232,0,61,.18);
-    --bg: #0f1117;
-    --bg-card: #181c27;
-    --bg-raised: #1e2235;
-    --bg-input: #242838;
-    --border: #2a2f42;
-    --border-light: #333849;
-    --text: #e8eaf0;
-    --text-muted: #8b92a8;
-    --text-dim: #555e78;
+    --red: #E8003D;
+    --red-dark: #c0002f;
+    --red-glow: rgba(232,0,61,.15);
+    --bg: #0d1017;
+    --bg-card: #131720;
+    --bg-raised: #1a1f2e;
+    --bg-input: #1e2333;
+    --bg-hover: #232840;
+    --border: #252b3b;
+    --border-light: #2e3548;
+    --border-focus: #3d4560;
+    --text: #e2e8f0;
+    --text-muted: #7c8596;
+    --text-dim: #4a5168;
     --white: #ffffff;
     --green: #10b981;
-    --green-dark: #059669;
-    --blue: #4d96ff;
-    --teal: #0d9488;
+    --blue: #6366f1;
+    --amber: #f59e0b;
+    --radius: 8px;
+    --radius-lg: 12px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,.4);
+    --shadow-md: 0 4px 12px rgba(0,0,0,.5);
+    --shadow-lg: 0 8px 32px rgba(0,0,0,.6);
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
-
-  body { font-family: 'DM Sans', sans-serif; background: var(--bg); min-height: 100vh; color: var(--text); }
-
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg); min-height: 100vh; color: var(--text); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
   .app { min-height: 100vh; }
 
-  /* NAV */
-  .nav { background: #0a0c12; padding: 0 28px; height: 60px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; border-bottom: 3px solid var(--or-red); box-shadow: 0 2px 20px rgba(232,0,61,.15); }
-  .nav-brand { font-family: 'Libre Franklin', sans-serif; color: var(--white); font-size: 18px; font-weight: 800; letter-spacing: -.3px; display: flex; align-items: center; gap: 10px; }
-  .nav-brand-dot { width: 10px; height: 10px; background: white; border-radius: 50%; flex-shrink: 0; }
-  .nav-sprint { color: #aaa; font-size: 13px; }
-  .nav-tabs { display: flex; gap: 2px; }
-  .nav-tab { padding: 7px 18px; border-radius: 4px; border: none; cursor: pointer; font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 600; transition: all .2s; letter-spacing: .01em; }
-  .nav-tab.active { background: var(--or-red); color: white; }
-  .nav-tab:not(.active) { background: transparent; color: var(--text-muted); }
-  .nav-tab:not(.active):hover { background: rgba(255,255,255,.07); color: var(--text); }
+  /* ── NAV ── */
+  .nav { background: rgba(13,16,23,.95); backdrop-filter: blur(12px); padding: 0 24px; height: 56px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; border-bottom: 1px solid var(--border); }
+  .nav-brand { font-size: 15px; font-weight: 700; color: var(--white); letter-spacing: -.3px; display: flex; align-items: center; gap: 8px; }
+  .nav-brand-dot { width: 8px; height: 8px; background: var(--red); border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 8px var(--red); }
+  .nav-tabs { display: flex; gap: 1px; }
+  .nav-tab { padding: 6px 14px; border-radius: var(--radius); border: none; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 500; transition: all .15s; background: transparent; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+  .nav-tab:hover { background: var(--bg-raised); color: var(--text); }
+  .nav-tab.active { background: var(--bg-raised); color: var(--text); border: 1px solid var(--border-light); }
+  .nav-tab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); box-shadow: 0 0 6px var(--red); animation: pulse-dot 1.2s ease-in-out infinite; flex-shrink: 0; }
+  @keyframes pulse-dot { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .5; transform: scale(.75); } }
+  .refresh-btn { background: none; border: none; cursor: pointer; color: var(--text-muted); font-size: 14px; padding: 2px 4px; transition: color .15s; display: inline-flex; align-items: center; line-height: 1; }
+  .refresh-btn:hover { color: var(--red); }
+  .sub-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 20px; padding: 2px 8px 2px 3px; font-size: 11px; font-weight: 500; color: var(--text-muted); }
+  .sub-chip-dot { width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; color: white; flex-shrink: 0; }
 
-  /* COUNTDOWN BANNER */
-  .countdown-bar { position: sticky; top: 60px; z-index: 99; width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 8px 24px; font-size: 13px; font-weight: 600; transition: background .8s, color .8s; letter-spacing: .01em; border-bottom: 1px solid rgba(0,0,0,.1); }
-  .countdown-bar.open   { background: #1a2e1a; color: #5cb85c; }
-  .countdown-bar.soon   { background: #2e2010; color: #e8a020; }
-  .countdown-bar.urgent { background: #2e0a0a; color: #ff4444; animation: bar-pulse 1.4s ease-in-out infinite; }
-  .countdown-bar.closed { background: #222; color: #666; }
-  .countdown-bar-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; transition: background .8s; }
-  .countdown-bar.open   .countdown-bar-dot { background: #5cb85c; box-shadow: 0 0 6px #5cb85c; }
-  .countdown-bar.soon   .countdown-bar-dot { background: #e8a020; box-shadow: 0 0 6px #e8a020; }
-  .countdown-bar.urgent .countdown-bar-dot { background: #ff4444; box-shadow: 0 0 8px #ff4444; }
-  .countdown-bar.closed .countdown-bar-dot { background: #555; }
-  .countdown-bar-time { font-family: 'Libre Franklin', sans-serif; font-size: 15px; font-weight: 700; letter-spacing: 1px; }
-  .countdown-bar-label { opacity: .65; font-size: 12px; font-weight: 500; }
-  @keyframes bar-pulse { 0%,100% { opacity:1; } 50% { opacity:.65; } }
+  .session-select-wrap { position: relative; }
+  .session-select { background: var(--bg-raised); border: 1px solid var(--border-light); border-radius: var(--radius); color: var(--text); font-family: inherit; font-size: 13px; font-weight: 500; padding: 5px 28px 5px 10px; cursor: pointer; outline: none; appearance: none; -webkit-appearance: none; max-width: 200px; }
+  .session-select:focus { border-color: var(--border-focus); }
+  .session-select-arrow { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--text-muted); font-size: 10px; }
 
-  /* AI IDEAS */
-  .ai-ideas-btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: 20px; border: 1.5px solid #c77dff; background: rgba(199,125,255,.08); color: #c77dff; font-size: 12px; font-weight: 700; cursor: pointer; transition: all .2s; margin-bottom: 10px; }
-  .ai-ideas-btn:hover { background: rgba(199,125,255,.18); }
-  .ai-ideas-btn:disabled { opacity: .5; cursor: not-allowed; }
-  .ai-ideas-wrap { background: linear-gradient(135deg, rgba(199,125,255,.06), rgba(77,150,255,.06)); border: 1.5px solid #c77dff30; border-radius: 12px; padding: 14px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; }
-  .ai-ideas-header { font-size: 11px; font-weight: 700; color: #9b59b6; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 2px; display: flex; align-items: center; gap: 5px; }
-  .ai-idea-chip { display: flex; align-items: flex-start; gap: 8px; background: var(--bg-raised); border: 1.5px solid rgba(199,125,255,.2); border-radius: 10px; padding: 10px 12px; cursor: pointer; transition: all .2s; text-align: left; }
-  .ai-idea-chip:hover { border-color: #c77dff; background: var(--bg-input); transform: translateX(3px); }
-  .ai-idea-chip-text { font-size: 13px; color: var(--text); line-height: 1.45; flex: 1; }
-  .ai-idea-use { font-size: 11px; color: #c77dff; font-weight: 700; white-space: nowrap; flex-shrink: 0; margin-top: 1px; }
-  .ai-ideas-loading { display: flex; align-items: center; gap: 8px; color: #9b59b6; font-size: 13px; padding: 6px 0; }
-  .ai-dot-spin { width: 16px; height: 16px; border: 2px solid #e8d5f5; border-top-color: #c77dff; border-radius: 50%; animation: spin .7s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
+  /* ── COUNTDOWN ── */
+  .countdown-bar { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 7px 24px; font-size: 12px; font-weight: 500; border-bottom: 1px solid var(--border); transition: all .8s; }
+  .countdown-bar.state-open   { background: rgba(16,185,129,.06); color: #34d399; }
+  .countdown-bar.state-soon   { background: rgba(245,158,11,.06); color: #fbbf24; }
+  .countdown-bar.state-urgent { background: rgba(239,68,68,.08); color: #f87171; animation: pulse 1.4s ease-in-out infinite; }
+  .countdown-bar.state-closed { background: transparent; color: var(--text-dim); }
+  .countdown-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; background: currentColor; }
+  .countdown-bar.state-open .countdown-dot   { box-shadow: 0 0 6px currentColor; }
+  .countdown-bar.state-urgent .countdown-dot { box-shadow: 0 0 8px currentColor; }
+  .countdown-time { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .5px; }
+  .countdown-label { opacity: .65; font-size: 11px; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.6; } }
+  @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
 
-  /* NAME FIELD */
-  .name-card { background: var(--bg-raised); border: 1px solid var(--border-light); border-radius: 12px; padding: 22px 28px; margin-bottom: 20px; }
-  .name-card-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text-muted); margin-bottom: 8px; }
-  .name-card-title { font-family: 'Libre Franklin', sans-serif; font-size: 17px; font-weight: 700; color: var(--text); margin-bottom: 14px; }
-  .name-input { width: 100%; border: 1.5px solid var(--border-light); border-radius: 8px; padding: 11px 14px; font-family: 'DM Sans', sans-serif; font-size: 15px; font-weight: 600; background: var(--bg-input); color: var(--text); outline: none; transition: border .2s; }
-  .name-input::placeholder { color: var(--text-dim); }
-  .name-input:focus { border-color: var(--or-red); background: var(--bg-input); }
+  /* ── BUTTONS ── */
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: var(--radius); border: 1px solid transparent; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: all .15s; white-space: nowrap; }
+  .btn-primary { background: var(--red); color: white; border-color: var(--red); }
+  .btn-primary:hover { background: var(--red-dark); border-color: var(--red-dark); }
+  .btn-secondary { background: var(--bg-raised); color: var(--text-muted); border-color: var(--border-light); }
+  .btn-secondary:hover { background: var(--bg-hover); color: var(--text); border-color: var(--border-focus); }
+  .btn-ghost { background: transparent; color: var(--text-muted); border-color: transparent; }
+  .btn-ghost:hover { background: var(--bg-raised); color: var(--text); }
+  .btn-success { background: rgba(16,185,129,.12); color: #34d399; border-color: rgba(16,185,129,.25); }
+  .btn-success:hover { background: rgba(16,185,129,.2); }
+  .btn-danger { background: transparent; color: #f87171; border-color: rgba(248,113,113,.3); }
+  .btn-danger:hover { background: rgba(248,113,113,.1); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
 
-  /* SUBMIT VIEW */
-  .submit-wrap { max-width: 680px; margin: 0 auto; padding: 36px 24px 80px; background: var(--bg); }
-  .submit-header { margin-bottom: 32px; border-bottom: 1px solid var(--border); padding-bottom: 24px; }
-  .submit-header h1 { font-family: 'Libre Franklin', sans-serif; font-size: 30px; font-weight: 800; color: var(--text); letter-spacing: -.5px; }
-  .submit-header p { color: var(--text-muted); margin-top: 6px; font-size: 15px; }
-  .anon-badge { display: inline-flex; align-items: center; gap: 6px; background: rgba(16,185,129,.12); color: var(--green); border-radius: 4px; padding: 4px 10px; font-size: 12px; font-weight: 600; margin-top: 10px; border: 1px solid rgba(16,185,129,.25); }
+  /* ── FORM ELEMENTS ── */
+  .input { width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); border-radius: var(--radius); padding: 8px 12px; font-family: inherit; font-size: 14px; color: var(--text); outline: none; transition: border .15s; }
+  .input::placeholder { color: var(--text-dim); }
+  .input:focus { border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(99,102,241,.1); }
+  .select { width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); border-radius: var(--radius); padding: 8px 12px; font-family: inherit; font-size: 14px; color: var(--text); outline: none; cursor: pointer; }
+  .label { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 5px; display: block; letter-spacing: .02em; }
 
-  .q-card { background: var(--bg-card); border-radius: 8px; padding: 26px 28px; margin-bottom: 16px; border: 1px solid var(--border); border-top: 4px solid #444; }
-  .q-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text-dim); margin-bottom: 5px; }
-  .q-prompt { font-family: 'Libre Franklin', sans-serif; font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 18px; line-height: 1.4; }
+  /* ── SUBMIT VIEW ── */
+  .submit-wrap { max-width: 640px; margin: 0 auto; padding: 40px 24px 80px; }
+  .submit-header { margin-bottom: 32px; }
+  .submit-header h1 { font-size: 24px; font-weight: 700; color: var(--text); letter-spacing: -.4px; }
+  .submit-header p { color: var(--text-muted); margin-top: 4px; font-size: 14px; }
+  .anon-badge { display: inline-flex; align-items: center; gap: 5px; background: rgba(16,185,129,.08); color: #34d399; border-radius: 20px; padding: 3px 10px; font-size: 11px; font-weight: 600; margin-top: 10px; border: 1px solid rgba(16,185,129,.2); }
 
-  .emoji-grid { display: flex; flex-wrap: wrap; gap: 8px; }
-  .emoji-btn { width: 44px; height: 44px; border-radius: 6px; border: 2px solid transparent; background: var(--bg-raised); font-size: 22px; cursor: pointer; transition: all .15s; display: flex; align-items: center; justify-content: center; }
-  .emoji-btn:hover { background: var(--bg-input); transform: scale(1.12); }
-  .emoji-btn.selected { border-color: var(--or-red); background: var(--or-red-glow); transform: scale(1.12); }
+  .name-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px 24px; margin-bottom: 16px; }
+  .name-card-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.2px; color: var(--text-dim); margin-bottom: 6px; }
+  .name-card-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 12px; }
 
-  .text-input { width: 100%; border: 1.5px solid var(--border); border-radius: 6px; padding: 12px 14px; font-family: 'DM Sans', sans-serif; font-size: 15px; resize: vertical; min-height: 80px; transition: border .2s; outline: none; background: var(--bg-input); color: var(--text); }
-  .text-input:focus { border-color: var(--or-red); box-shadow: 0 0 0 3px var(--or-red-glow); }
+  .q-card { background: var(--bg-card); border-radius: var(--radius-lg); padding: 24px; margin-bottom: 12px; border: 1px solid var(--border); border-left: 3px solid #444; transition: border-color .2s; }
+  .q-card:focus-within { border-color: var(--border-focus); }
+  .q-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text-dim); margin-bottom: 4px; }
+  .q-prompt { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 16px; line-height: 1.4; }
 
-  .submit-btn { width: 100%; padding: 15px; background: var(--or-red); color: white; border: none; border-radius: 6px; font-family: 'Libre Franklin', sans-serif; font-size: 17px; font-weight: 800; cursor: pointer; transition: all .2s; letter-spacing: .01em; margin-top: 12px; }
-  .submit-btn:hover { background: var(--or-red-dark); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(211,0,45,.3); }
-  .submit-btn:disabled { opacity: .4; cursor: not-allowed; transform: none; box-shadow: none; }
+  .emoji-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+  .emoji-btn { width: 42px; height: 42px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-raised); font-size: 20px; cursor: pointer; transition: all .15s; display: flex; align-items: center; justify-content: center; }
+  .emoji-btn:hover { background: var(--bg-hover); border-color: var(--border-focus); transform: scale(1.08); }
+  .emoji-btn.selected { border-color: var(--red); background: var(--red-glow); }
+
+  .submit-btn { width: 100%; padding: 12px; background: var(--red); color: white; border: none; border-radius: var(--radius); font-family: inherit; font-size: 15px; font-weight: 600; cursor: pointer; transition: all .15s; }
+  .submit-btn:hover { background: var(--red-dark); }
+  .submit-btn:disabled { opacity: .35; cursor: not-allowed; }
+  .exit-btn { padding: 12px 18px; background: transparent; color: var(--text-muted); border: 1px solid var(--border-light); border-radius: var(--radius); font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer; transition: all .15s; white-space: nowrap; }
+  .exit-btn:hover { border-color: var(--border-focus); color: var(--text); }
+  .submit-actions { display: flex; gap: 8px; margin-top: 16px; }
 
   .success-wrap { text-align: center; padding: 80px 24px; }
-  .success-icon { font-size: 64px; margin-bottom: 20px; }
-  .success-wrap h2 { font-family: 'Libre Franklin', sans-serif; font-size: 30px; font-weight: 800; color: var(--text); }
-  .success-wrap p { color: var(--text-muted); margin-top: 10px; font-size: 16px; }
+  .success-icon { font-size: 56px; margin-bottom: 16px; }
+  .success-wrap h2 { font-size: 24px; font-weight: 700; color: var(--text); }
+  .success-wrap p { color: var(--text-muted); margin-top: 8px; }
 
-  /* EDIT LINK BOX */
-  .edit-link-box { background: var(--bg-raised); border: 1px solid var(--or-red); border-radius: 14px; padding: 20px 24px; margin-top: 28px; text-align: left; }
-  .edit-link-box h3 { font-family: 'Libre Franklin', sans-serif; font-size: 17px; font-weight: 800; color: var(--text); margin-bottom: 6px; }
-  .edit-link-box p { font-size: 13px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.5; }
+  .edit-link-box { background: var(--bg-raised); border: 1px solid var(--border-light); border-radius: var(--radius-lg); padding: 18px 20px; margin-top: 24px; }
+  .edit-link-box h3 { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+  .edit-link-box p { font-size: 12px; color: var(--text-muted); margin-bottom: 10px; }
   .edit-link-copy-row { display: flex; gap: 8px; align-items: center; }
-  .edit-link-url { flex: 1; background: var(--bg-input); border: 1.5px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 12px; color: var(--text-muted); font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .copy-btn { padding: 8px 14px; background: var(--or-red); color: white; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 13px; white-space: nowrap; transition: all .2s; }
-  .copy-btn:hover { background: var(--or-red-dark); }
-  .copy-btn.copied { background: #2e7d32; color: white; }
-  .cutoff-notice { font-size: 12px; font-weight: 600; margin-top: 10px; display: flex; align-items: center; gap: 4px; color: #f59e0b; }
-  .cutoff-live { font-size: 13px; }
-  .cutoff-live.open { color: #5cb85c; }
-  .cutoff-live.soon { color: #e8a020; }
-  .cutoff-live.urgent { color: #ff4444; animation: bar-pulse 1.4s ease-in-out infinite; }
-  .cutoff-live.closed { color: var(--text-dim); }
-  .cutoff-live strong { font-family: 'Libre Franklin', sans-serif; letter-spacing: .5px; }
+  .edit-link-url { flex: 1; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 10px; font-size: 11px; color: var(--text-muted); font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .copy-btn { padding: 7px 12px; background: var(--red); color: white; border: none; border-radius: var(--radius); font-family: inherit; font-weight: 600; cursor: pointer; font-size: 12px; white-space: nowrap; transition: all .15s; }
+  .copy-btn:hover { background: var(--red-dark); }
+  .copy-btn.copied { background: #059669; }
 
-  /* CONFIRM MODAL */
-  .confirm-summary { background: var(--bg-raised); border-radius: 12px; padding: 16px; margin: 16px 0; display: flex; flex-direction: column; gap: 10px; }
+  .session-link-box { background: rgba(16,185,129,.05); border: 1px solid rgba(16,185,129,.2); border-radius: var(--radius-lg); padding: 18px 20px; margin-top: 16px; }
+  .session-link-box h3 { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+  .session-link-box p { font-size: 12px; color: var(--text-muted); margin-bottom: 10px; }
+
+  .editing-banner { background: rgba(99,102,241,.08); border: 1px solid rgba(99,102,241,.25); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 16px; font-size: 13px; color: var(--text-muted); display: flex; align-items: center; gap: 8px; }
+  .closed-banner { background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 16px; font-size: 13px; color: var(--text-muted); text-align: center; }
+
+  /* ── MODAL ── */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 24px; backdrop-filter: blur(4px); }
+  .modal { background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 16px; padding: 28px; max-width: 520px; width: 100%; max-height: 90vh; overflow-y: auto; box-shadow: var(--shadow-lg); }
+  .modal h2 { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
+  .modal p { color: var(--text-muted); font-size: 13px; margin-bottom: 16px; }
+  .modal-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; flex-wrap: wrap; }
+
+  /* ── CONFIRM MODAL ── */
+  .confirm-summary { background: var(--bg-raised); border-radius: var(--radius); padding: 14px; margin: 14px 0; display: flex; flex-direction: column; gap: 10px; }
   .confirm-row { display: flex; gap: 10px; align-items: flex-start; }
-  .confirm-q-label { font-size: 11px; font-weight: 700; color: white; border-radius: 6px; padding: 2px 8px; flex-shrink: 0; margin-top: 1px; }
+  .confirm-q-label { font-size: 10px; font-weight: 700; color: white; border-radius: 4px; padding: 2px 7px; flex-shrink: 0; margin-top: 2px; }
   .confirm-answer { font-size: 13px; color: var(--text); line-height: 1.4; }
   .confirm-answer.empty { color: var(--text-dim); font-style: italic; }
 
-  /* EDITING BANNER */
-  .editing-banner { background: #e8f0fe; border: 2px solid #4D96FF; border-radius: 12px; padding: 12px 16px; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; font-size: 14px; color: #1a1a2e; }
-  .editing-banner strong { color: #4D96FF; }
+  /* ── SETTINGS ── */
+  .settings-gear { width: 32px; height: 32px; border-radius: var(--radius); border: 1px solid var(--border-light); background: transparent; color: var(--text-muted); font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .15s; }
+  .settings-gear:hover { background: var(--bg-raised); color: var(--text); }
+  .settings-lock { text-align: center; padding: 8px 0 4px; }
+  .settings-lock-icon { font-size: 36px; margin-bottom: 10px; }
+  .settings-pw-row { display: flex; gap: 8px; }
+  .settings-pw-input { flex: 1; background: var(--bg-input); border: 1px solid var(--border-light); border-radius: var(--radius); padding: 9px 12px; font-family: inherit; font-size: 14px; color: var(--text); outline: none; }
+  .settings-pw-input:focus { border-color: var(--border-focus); }
+  .settings-pw-error { color: #f87171; font-size: 12px; margin-top: 6px; text-align: center; }
+  .settings-section { margin-bottom: 20px; }
+  .settings-section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  .settings-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+  .settings-hint { font-size: 11px; color: var(--text-dim); margin-top: 3px; }
+  .settings-saved { display: flex; align-items: center; gap: 5px; color: var(--green); font-size: 13px; font-weight: 500; }
 
-  /* CLOSED BANNER */
-  .closed-wrap { text-align: center; padding: 80px 24px; }
-  .closed-wrap h2 { font-family: 'Libre Franklin', sans-serif; font-size: 26px; font-weight: 800; color: var(--text); margin-top: 16px; }
-  .closed-wrap p { color: var(--text-muted); margin-top: 8px; font-size: 15px; }
+  .session-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+  .session-list-item { display: flex; align-items: center; gap: 10px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; cursor: pointer; transition: all .15s; }
+  .session-list-item:hover { border-color: var(--border-focus); }
+  .session-list-item.active { border-color: var(--red); background: rgba(232,0,61,.05); }
+  .session-list-item-name { font-weight: 600; font-size: 13px; color: var(--text); }
+  .session-list-item-meta { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+  .session-list-item-del { color: var(--text-dim); cursor: pointer; font-size: 15px; padding: 2px 5px; border-radius: 4px; }
+  .session-list-item-del:hover { color: #f87171; background: rgba(248,113,113,.1); }
 
-  /* BOARD VIEW */
-  .board-wrap { padding: 24px; overflow-x: auto; background: var(--bg); min-height: calc(100vh - 56px); }
-  .board-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
-  .board-title { font-family: 'Libre Franklin', sans-serif; font-size: 22px; font-weight: 800; color: var(--text); flex: 1; }
-  .tool-btn { padding: 8px 16px; border-radius: 4px; border: 1.5px solid var(--border-light); background: var(--bg-raised); color: var(--text); font-family: 'DM Sans', sans-serif; font-weight: 600; font-size: 13px; cursor: pointer; transition: all .2s; display: flex; align-items: center; gap: 6px; }
-  .tool-btn:hover { background: var(--border-light); color: var(--text); }
-  .tool-btn.primary { background: var(--or-red); color: white; }
-  .tool-btn.primary:hover { background: var(--or-red-dark); }
-  .tool-btn.danger { border-color: #FF6B6B; color: #FF6B6B; }
-  .tool-btn.danger:hover { background: #FF6B6B; color: white; }
+  /* ── TOGGLE SWITCH ── */
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .toggle-row:last-child { border-bottom: none; }
+  .toggle-label { font-size: 13px; font-weight: 500; color: var(--text); }
+  .toggle-hint { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+  .toggle { position: relative; width: 36px; height: 20px; flex-shrink: 0; }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle-slider { position: absolute; inset: 0; background: var(--border-light); border-radius: 20px; cursor: pointer; transition: background .2s; }
+  .toggle-slider:before { content: ''; position: absolute; width: 14px; height: 14px; border-radius: 50%; background: white; top: 3px; left: 3px; transition: transform .2s; box-shadow: var(--shadow-sm); }
+  .toggle input:checked + .toggle-slider { background: var(--red); }
+  .toggle input:checked + .toggle-slider:before { transform: translateX(16px); }
 
-  .board-columns { display: flex; gap: 20px; min-width: max-content; align-items: flex-start; }
-
-  .col { width: 300px; flex-shrink: 0; }
-  .col-header { border-radius: 12px 12px 0 0; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; }
-  .col-header-title { font-family: 'Fredoka One', cursive; font-size: 16px; color: white; text-shadow: 0 1px 2px rgba(0,0,0,.2); line-height: 1.3; }
-  .col-count { background: rgba(255,255,255,.3); color: white; border-radius: 12px; padding: 2px 8px; font-size: 12px; font-weight: 700; white-space: nowrap; }
-  .col-body { background: rgba(255,255,255,.04); border-radius: 0 0 12px 12px; padding: 12px; min-height: 200px; display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--border); border-top: none; }
-
-  .sticky { border-radius: 10px; padding: 12px 14px; box-shadow: 2px 3px 0 rgba(0,0,0,.12); cursor: pointer; transition: all .2s; position: relative; }
-  .sticky:hover { transform: translateY(-2px) rotate(0.5deg); box-shadow: 4px 6px 0 rgba(0,0,0,.15); }
-  .sticky.hidden-card { filter: blur(4px); pointer-events: none; }
-  .sticky-content { font-size: 14px; color: #1a1a1a; line-height: 1.5; font-weight: 500; }
-  .sticky-emoji { font-size: 28px; text-align: center; padding: 4px; }
-  .sticky-author { font-size: 11px; color: rgba(0,0,0,.55); margin-top: 6px; font-weight: 600; }
-  .sticky-group-badge { position: absolute; top: -6px; right: 8px; background: #1a1a2e; color: white; border-radius: 8px; padding: 1px 7px; font-size: 10px; font-weight: 700; }
-
-  .group-block { background: rgba(255,255,255,.04); border: 1.5px dashed rgba(255,255,255,.1); border-radius: 12px; padding: 10px; }
-  .group-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; }
-  .group-label input { background: transparent; border: none; font: inherit; color: var(--text-muted); width: 120px; outline: none; }
-  .group-label input:focus { border-bottom: 1px solid var(--border-light); }
-
-  .revealed-banner { background: rgba(16,185,129,.2); color: #10b981; color: white; text-align: center; padding: 8px; font-weight: 700; font-size: 13px; border-radius: 8px; margin-bottom: 8px; }
-
-  /* ACTION ITEMS */
-  .actions-panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 24px; margin-top: 20px; box-shadow: 0 2px 12px rgba(0,0,0,.06); min-width: 300px; max-width: 600px; }
-  .actions-title { font-family: 'Libre Franklin', sans-serif; font-size: 18px; font-weight: 800; color: var(--text); margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
-  .action-item { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
-  .action-item:last-child { border-bottom: none; }
-  .action-check { width: 20px; height: 20px; border-radius: 50%; border: 2px solid #ddd; cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: all .2s; }
-  .action-check.done { background: #6BCB77; border-color: #6BCB77; color: white; font-size: 11px; }
-  .action-text { flex: 1; font-size: 14px; color: var(--text); }
-  .action-text.done { text-decoration: line-through; color: var(--text-dim); }
-  .action-owner { font-size: 12px; color: var(--blue); font-weight: 600; background: rgba(77,150,255,.12); padding: 2px 8px; border-radius: 8px; white-space: nowrap; }
-  .action-delete { color: #ccc; cursor: pointer; font-size: 16px; transition: color .2s; }
-  .action-delete:hover { color: #FF6B6B; }
-  .add-action { display: flex; gap: 8px; margin-top: 12px; }
-  .add-action input { flex: 1; border: 1.5px solid var(--border); border-radius: 8px; padding: 8px 12px; font-family: 'DM Sans', sans-serif; font-size: 14px; outline: none; background: var(--bg-input); color: var(--text); }
-  .add-action input:focus { border-color: var(--or-red); }
-  .add-action-btn { padding: 8px 14px; background: var(--or-red); color: white; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 18px; }
-
-  /* HISTORY */
-  .history-wrap { max-width: 800px; margin: 0 auto; padding: 40px 24px; background: var(--bg); min-height: 100vh; }
-  .history-title { font-family: 'Libre Franklin', sans-serif; font-size: 28px; font-weight: 800; color: var(--text); margin-bottom: 24px; }
-  .history-card { background: var(--bg-card); border-radius: 16px; padding: 24px; margin-bottom: 16px; border: 1px solid var(--border); cursor: pointer; transition: all .2s; border-left: 6px solid var(--or-red); }
-  .history-card:hover { transform: translateY(-2px); box-shadow: 0 6px 24px rgba(0,0,0,.4); border-left-color: var(--or-red); }
-  .history-sprint { font-family: 'Libre Franklin', sans-serif; font-size: 18px; font-weight: 800; color: var(--text); }
-  .history-meta { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
-  .history-stats { display: flex; gap: 16px; margin-top: 12px; flex-wrap: wrap; }
-  .stat-pill { background: var(--bg-raised); border-radius: 20px; padding: 4px 12px; font-size: 12px; font-weight: 600; color: var(--text-muted); }
-
-  /* MODALS/OVERLAYS */
-  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 24px; }
-  .modal { background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 20px; padding: 32px; max-width: 480px; width: 100%; }
-  .modal h2 { font-family: 'Libre Franklin', sans-serif; font-size: 24px; font-weight: 800; color: var(--text); margin-bottom: 8px; }
-  .modal p { color: var(--text-muted); font-size: 14px; margin-bottom: 20px; }
-  .modal-btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
-
-  .ai-suggestion { background: linear-gradient(135deg, rgba(102,126,234,.1), rgba(118,75,162,.1)); border: 1px solid #667eea40; border-radius: 10px; padding: 12px; margin-top: 8px; }
-  .ai-suggestion-title { font-size: 11px; font-weight: 700; color: #764ba2; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; display: flex; align-items: center; gap: 4px; }
-  .suggestion-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 13px; color: var(--text); cursor: pointer; border-radius: 6px; transition: background .15s; padding: 6px 8px; }
-  .suggestion-item:hover { background: rgba(102,126,234,.1); }
-  .suggestion-apply { font-size: 11px; color: #667eea; font-weight: 600; margin-left: auto; }
-
-  .sprint-selector { display: flex; align-items: center; gap: 8px; }
-  .sprint-selector button { width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid var(--border-light); background: var(--bg-raised); color: var(--text); background: white; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-weight: 700; }
-  .sprint-selector span { font-size: 14px; font-weight: 600; min-width: 70px; text-align: center; color: var(--text-muted); }
-
-  .tag { display: inline-block; border-radius: 20px; padding: 2px 10px; font-size: 11px; font-weight: 700; }
-
-  /* Q1 PICKER — emoji + gif toggle */
-  .q1-mode-toggle { display: flex; align-items: center; gap: 0; margin-bottom: 18px; background: var(--bg-raised); border-radius: 8px; padding: 3px; width: fit-content; }
-  .q1-mode-btn { padding: 7px 18px; border: none; background: transparent; font-family: 'DM Sans', sans-serif; font-weight: 600; font-size: 13px; cursor: pointer; transition: all .2s; color: var(--text-muted); border-radius: 6px; display: flex; align-items: center; gap: 6px; }
-  .q1-mode-btn.active { background: var(--bg-input); color: var(--text); box-shadow: 0 1px 4px rgba(0,0,0,.12); }
-  .q1-mode-btn.active.gif-mode { color: #059669; }
-  .toggle-switch { width: 28px; height: 16px; background: #cbd5e1; border-radius: 8px; position: relative; transition: background .2s; flex-shrink: 0; }
-  .toggle-switch.on { background: #10b981; }
-  .toggle-switch::after { content: ; position: absolute; width: 12px; height: 12px; border-radius: 50%; background: white; top: 2px; left: 2px; transition: transform .2s; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+  /* ── Q1 PICKER ── */
+  .q1-mode-toggle { display: flex; margin-bottom: 16px; background: var(--bg-raised); border-radius: var(--radius); padding: 3px; width: fit-content; border: 1px solid var(--border); }
+  .q1-mode-btn { padding: 6px 16px; border: none; background: transparent; font-family: inherit; font-weight: 500; font-size: 13px; cursor: pointer; transition: all .15s; color: var(--text-muted); border-radius: 6px; display: flex; align-items: center; gap: 5px; }
+  .q1-mode-btn.active { background: var(--bg-card); color: var(--text); box-shadow: var(--shadow-sm); }
+  .toggle-switch { width: 26px; height: 14px; background: var(--border-light); border-radius: 8px; position: relative; transition: background .2s; flex-shrink: 0; }
+  .toggle-switch.on { background: var(--green); }
+  .toggle-switch::after { content: ''; position: absolute; width: 10px; height: 10px; border-radius: 50%; background: white; top: 2px; left: 2px; transition: transform .2s; }
   .toggle-switch.on::after { transform: translateX(12px); }
 
-  /* GIF PICKER */
-  .gif-picker { display: flex; flex-direction: column; gap: 12px; }
+  /* ── GIF PICKER ── */
+  .gif-picker { display: flex; flex-direction: column; gap: 10px; }
   .gif-search-row { display: flex; gap: 8px; }
-  .gif-search-input { flex: 1; border: 1.5px solid var(--border); border-radius: 10px; padding: 10px 14px; font-family: 'DM Sans', sans-serif; font-size: 14px; outline: none; transition: border .2s; background: var(--bg-input); color: var(--text); }
-  .gif-search-input:focus { border-color: #0d9488; }
-  .gif-search-btn { padding: 10px 18px; background: var(--or-black); color: white; border: none; border-radius: 10px; font-weight: 700; cursor: pointer; font-size: 13px; white-space: nowrap; transition: background .2s; }
-  .gif-search-btn:hover { background: #2d2d50; }
-  .gif-search-btn:disabled { opacity: .5; cursor: not-allowed; }
-  .gif-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-height: 280px; overflow-y: auto; border-radius: 10px; }
-  .gif-grid::-webkit-scrollbar { width: 4px; }
-  .gif-grid::-webkit-scrollbar-thumb { background: #ddd; border-radius: 4px; }
-  .gif-item { border-radius: 8px; overflow: hidden; cursor: pointer; border: 3px solid transparent; transition: all .2s; aspect-ratio: 1; position: relative; }
+  .gif-search-input { flex: 1; background: var(--bg-input); border: 1px solid var(--border-light); border-radius: var(--radius); padding: 8px 12px; font-family: inherit; font-size: 13px; color: var(--text); outline: none; }
+  .gif-search-input:focus { border-color: var(--border-focus); }
+  .gif-search-btn { padding: 8px 16px; background: var(--bg-raised); color: var(--text); border: 1px solid var(--border-light); border-radius: var(--radius); font-family: inherit; font-weight: 500; cursor: pointer; font-size: 13px; white-space: nowrap; transition: all .15s; }
+  .gif-search-btn:hover { background: var(--bg-hover); }
+  .gif-search-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .gif-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; max-height: 260px; overflow-y: auto; border-radius: var(--radius); }
+  .gif-item { border-radius: var(--radius); overflow: hidden; cursor: pointer; border: 2px solid transparent; transition: all .15s; aspect-ratio: 1; position: relative; }
   .gif-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .gif-item:hover { border-color: #0d9488; transform: scale(1.03); }
-  .gif-item.selected { border-color: #0d9488; box-shadow: 0 0 0 2px #0d9488; }
-  .gif-item .gif-check { position: absolute; top: 4px; right: 4px; background: #0d9488; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; }
-  .gif-loading { text-align: center; padding: 32px; color: var(--text-muted); font-size: 14px; }
-  .gif-empty { text-align: center; padding: 24px; color: var(--text-dim); font-size: 13px; }
-  .gif-selected-preview { display: flex; align-items: center; gap: 12px; background: #f0fdf9; border: 2px solid #0d9488; border-radius: 12px; padding: 12px; }
-  .gif-selected-preview img { width: 72px; height: 72px; object-fit: cover; border-radius: 8px; }
-  .gif-selected-preview-text { flex: 1; font-size: 13px; color: var(--text-muted); }
-  .gif-selected-preview-text strong { display: block; color: var(--text); font-size: 14px; margin-bottom: 2px; }
-  .gif-change-btn { font-size: 12px; color: #999; text-decoration: underline; cursor: pointer; background: none; border: none; font-family: 'DM Sans', sans-serif; padding: 0; margin-top: 4px; }
-  .giphy-attr { font-size: 10px; color: #bbb; text-align: right; margin-top: 4px; font-style: italic; }
+  .gif-item:hover { border-color: var(--blue); }
+  .gif-item.selected { border-color: var(--blue); }
+  .gif-item .gif-check { position: absolute; top: 4px; right: 4px; background: var(--blue); color: white; border-radius: 50%; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; }
+  .gif-loading,.gif-empty { text-align: center; padding: 24px; color: var(--text-muted); font-size: 13px; }
+  .gif-selected-preview { display: flex; align-items: center; gap: 10px; background: var(--bg-raised); border: 1px solid var(--border-light); border-radius: var(--radius); padding: 10px; }
+  .gif-selected-preview img { width: 60px; height: 60px; object-fit: cover; border-radius: var(--radius); }
+  .gif-selected-preview-text { flex: 1; font-size: 12px; color: var(--text-muted); }
+  .gif-selected-preview-text strong { display: block; color: var(--text); font-size: 13px; margin-bottom: 2px; }
+  .gif-change-btn { font-size: 11px; color: var(--text-muted); text-decoration: underline; cursor: pointer; background: none; border: none; font-family: inherit; padding: 0; margin-top: 4px; }
+  .giphy-attr { font-size: 10px; color: var(--text-dim); text-align: right; margin-top: 4px; }
 
-  /* SETTINGS */
-  .settings-gear { width: 36px; height: 36px; border-radius: 50%; border: 1.5px solid var(--border-light); background: transparent; color: var(--text-muted); font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .2s; flex-shrink: 0; }
-  .settings-gear:hover { background: var(--bg-raised); color: var(--text); border-color: var(--or-red); }
-  .settings-modal { max-width: 560px; }
-  .settings-lock { text-align: center; padding: 12px 0 4px; }
-  .settings-lock-icon { font-size: 40px; margin-bottom: 12px; }
-  .settings-lock h2 { font-family: 'Libre Franklin', sans-serif; font-size: 22px; font-weight: 800; color: var(--text); margin-bottom: 6px; }
-  .settings-lock p { color: var(--text-muted); font-size: 14px; margin-bottom: 20px; }
-  .settings-pw-row { display: flex; gap: 8px; }
-  .settings-pw-input { flex: 1; border: 1.5px solid var(--border); border-radius: 6px; padding: 10px 14px; font-family: 'DM Sans', sans-serif; font-size: 15px; background: var(--bg-input); color: var(--text); outline: none; transition: border .2s; }
-  .settings-pw-input:focus { border-color: var(--or-red); }
-  .settings-pw-error { color: var(--or-red); font-size: 13px; margin-top: 8px; text-align: center; }
-  .settings-section { margin-bottom: 24px; }
-  .settings-section-title { font-family: 'Libre Franklin', sans-serif; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
-  .settings-row { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
-  .settings-label { font-size: 13px; font-weight: 600; color: var(--text); }
-  .settings-input { width: 100%; border: 1.5px solid var(--border); border-radius: 6px; padding: 9px 12px; font-family: 'DM Sans', sans-serif; font-size: 14px; background: var(--bg-input); color: var(--text); outline: none; transition: border .2s; }
-  .settings-input:focus { border-color: var(--or-red); }
-  .settings-select { width: 100%; border: 1.5px solid var(--border); border-radius: 6px; padding: 9px 12px; font-family: 'DM Sans', sans-serif; font-size: 14px; background: var(--bg-input); color: var(--text); outline: none; cursor: pointer; }
-  .settings-hint { font-size: 11px; color: var(--text-dim); margin-top: 3px; }
-  .settings-members { display: flex; flex-direction: column; gap: 6px; }
-  .settings-member-row { display: flex; gap: 6px; align-items: center; }
-  .settings-member-row input { flex: 1; border: 1.5px solid var(--border); border-radius: 6px; padding: 7px 10px; font-family: 'DM Sans', sans-serif; font-size: 13px; background: var(--bg-input); color: var(--text); outline: none; }
-  .settings-member-row input:focus { border-color: var(--or-red); }
-  .settings-add-member { display: flex; align-items: center; gap: 6px; color: var(--or-red); font-size: 13px; font-weight: 600; cursor: pointer; background: none; border: none; font-family: 'DM Sans', sans-serif; padding: 4px 0; margin-top: 4px; }
-  .settings-saved { display: flex; align-items: center; gap: 6px; color: var(--green); font-size: 13px; font-weight: 600; }
-
-  /* JOIN SCREEN */
-  .join-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--bg); }
-  .join-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 48px 40px; max-width: 440px; width: 100%; text-align: center; box-shadow: 0 8px 40px rgba(0,0,0,.4); }
-  .join-logo { font-family: 'Libre Franklin', sans-serif; font-size: 15px; font-weight: 800; color: var(--text-muted); letter-spacing: .5px; margin-bottom: 32px; display: flex; align-items: center; justify-content: center; gap: 8px; }
-  .join-logo-dot { width: 8px; height: 8px; background: var(--or-red); border-radius: 50%; }
-  .join-sprint { display: inline-block; background: var(--or-red-glow); color: var(--or-red); border: 1px solid rgba(232,0,61,.25); border-radius: 20px; padding: 4px 14px; font-size: 13px; font-weight: 700; margin-bottom: 20px; }
-  .join-title { font-family: 'Libre Franklin', sans-serif; font-size: 28px; font-weight: 800; color: var(--text); margin-bottom: 8px; line-height: 1.2; }
-  .join-sub { color: var(--text-muted); font-size: 15px; margin-bottom: 32px; line-height: 1.5; }
-  .join-input { width: 100%; border: 2px solid var(--border-light); border-radius: 8px; padding: 14px 16px; font-family: 'DM Sans', sans-serif; font-size: 17px; font-weight: 600; background: var(--bg-input); color: var(--text); outline: none; transition: border .2s; text-align: center; margin-bottom: 12px; }
-  .join-input::placeholder { color: var(--text-dim); font-weight: 400; }
-  .join-input:focus { border-color: var(--or-red); box-shadow: 0 0 0 3px var(--or-red-glow); }
-  .join-btn { width: 100%; padding: 14px; background: var(--or-red); color: white; border: none; border-radius: 8px; font-family: 'Libre Franklin', sans-serif; font-size: 17px; font-weight: 800; cursor: pointer; transition: all .2s; }
-  .join-btn:hover { background: var(--or-red-dark); transform: translateY(-1px); box-shadow: 0 4px 16px rgba(232,0,61,.3); }
-  .join-btn:disabled { opacity: .4; cursor: not-allowed; transform: none; box-shadow: none; }
-  .join-presence { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--border); }
-  .join-presence-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); margin-bottom: 10px; }
-  .join-avatars { display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: wrap; }
-  .join-avatar { display: flex; align-items: center; gap: 6px; background: var(--bg-raised); border-radius: 20px; padding: 4px 10px 4px 4px; }
-  .join-avatar-dot { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: white; flex-shrink: 0; }
-  .join-avatar-name { font-size: 13px; font-weight: 600; color: var(--text); }
-
-  /* RICH TEXT EDITOR */
+  /* ── RICH TEXT EDITOR ── */
   .rte-wrap { position: relative; }
-  .rte-toolbar { display: flex; align-items: center; gap: 2px; padding: 5px 8px; background: var(--bg-raised); border: 1.5px solid var(--border); border-bottom: none; border-radius: 6px 6px 0 0; flex-wrap: wrap; }
-  .rte-btn { width: 28px; height: 28px; border-radius: 4px; border: none; background: transparent; color: var(--text-muted); font-size: 13px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .15s; font-family: 'DM Sans', sans-serif; }
-  .rte-btn:hover { background: var(--bg-input); color: var(--text); }
-  .rte-btn.active { background: var(--or-red); color: white; }
-  .rte-divider { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
-  .rte-emoji-btn { padding: 0 8px; width: auto; font-size: 15px; }
-  .rte-editor { min-height: 90px; border: 1.5px solid var(--border); border-radius: 0 0 6px 6px; padding: 12px 14px; font-family: 'DM Sans', sans-serif; font-size: 15px; color: var(--text); background: var(--bg-input); outline: none; transition: border .2s; line-height: 1.6; }
-  .rte-editor:focus { border-color: var(--or-red); box-shadow: 0 0 0 3px var(--or-red-glow); }
+  .rte-toolbar { display: flex; align-items: center; gap: 2px; padding: 4px 6px; background: var(--bg-raised); border: 1px solid var(--border-light); border-bottom: none; border-radius: var(--radius) var(--radius) 0 0; }
+  .rte-btn { width: 26px; height: 26px; border-radius: 4px; border: none; background: transparent; color: var(--text-muted); font-size: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .15s; font-family: inherit; }
+  .rte-btn:hover { background: var(--bg-hover); color: var(--text); }
+  .rte-btn.active { background: var(--red); color: white; }
+  .rte-divider { width: 1px; height: 16px; background: var(--border); margin: 0 3px; }
+  .rte-emoji-btn { padding: 0 6px; width: auto; font-size: 14px; }
+  .rte-editor { min-height: 88px; border: 1px solid var(--border-light); border-radius: 0 0 var(--radius) var(--radius); padding: 10px 12px; font-family: inherit; font-size: 14px; color: var(--text); background: var(--bg-input); outline: none; transition: border .15s; line-height: 1.6; }
+  .rte-editor:focus { border-color: var(--border-focus); }
   .rte-editor:empty:before { content: attr(data-placeholder); color: var(--text-dim); pointer-events: none; }
-  .rte-editor b, .rte-editor strong { font-weight: 700; color: var(--text); }
+  .rte-editor b, .rte-editor strong { font-weight: 700; }
   .rte-editor i, .rte-editor em { font-style: italic; }
-  .rte-editor ul { padding-left: 20px; margin: 4px 0; }
-  .rte-editor li { margin: 2px 0; }
+  .rte-editor ul { padding-left: 18px; margin: 4px 0; }
 
-  /* EMOJI POPUP */
-  .emoji-popup { position: absolute; z-index: 300; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 12px; padding: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.5); width: 280px; }
-  .emoji-popup-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; max-height: 200px; overflow-y: auto; }
-  .emoji-popup-grid::-webkit-scrollbar { width: 4px; }
-  .emoji-popup-grid::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-  .emoji-popup-item { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: pointer; border-radius: 6px; transition: background .1s; }
+  /* ── EMOJI POPUP ── */
+  .emoji-popup { position: absolute; z-index: 300; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: var(--radius-lg); padding: 10px; box-shadow: var(--shadow-lg); width: 268px; }
+  .emoji-popup-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px; max-height: 180px; overflow-y: auto; }
+  .emoji-popup-item { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 16px; cursor: pointer; border-radius: 5px; transition: background .1s; }
   .emoji-popup-item:hover { background: var(--bg-raised); }
-  .emoji-popup-search { width: 100%; border: 1.5px solid var(--border); border-radius: 6px; padding: 6px 10px; font-family: 'DM Sans', sans-serif; font-size: 13px; background: var(--bg-input); color: var(--text); outline: none; margin-bottom: 8px; }
-  .emoji-popup-search:focus { border-color: var(--or-red); }
-  .join-q1-section { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); text-align: left; }
-  .join-q1-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); margin-bottom: 8px; }
-  .join-q1-prompt { font-family: 'Libre Franklin', sans-serif; font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 14px; }
-  .join-greeting { font-size: 40px; margin-bottom: 10px; }
-  .join-greeting-text { font-size: 16px; color: var(--text-muted); margin-bottom: 24px; }
+  .emoji-popup-search { width: 100%; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius); padding: 5px 8px; font-family: inherit; font-size: 12px; color: var(--text); outline: none; margin-bottom: 7px; }
 
-  /* REACTIONS */
-  .reaction-bar { display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: var(--bg-card); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-  .reaction-bar-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #999; margin-right: 4px; }
-  .reaction-emoji-btn { width: 36px; height: 36px; border-radius: 50%; border: 1.5px solid var(--border); background: var(--bg-raised); font-size: 18px; cursor: pointer; transition: all .15s; display: flex; align-items: center; justify-content: center; }
-  .reaction-emoji-btn:hover { background: var(--bg-input); transform: scale(1.2); border-color: var(--or-red); }
-  .reaction-drop { position: fixed; pointer-events: none; font-size: 28px; z-index: 999; animation: float-up 2.2s ease-out forwards; }
-  @keyframes float-up { 0% { opacity:1; transform: translateY(0) scale(1); } 60% { opacity:.9; transform: translateY(-60px) scale(1.2); } 100% { opacity:0; transform: translateY(-120px) scale(.8); } }
+  /* ── AI IDEAS ── */
+  .ai-ideas-btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px; border-radius: 20px; border: 1px solid rgba(139,92,246,.35); background: rgba(139,92,246,.07); color: #a78bfa; font-size: 11px; font-weight: 600; cursor: pointer; transition: all .15s; margin-bottom: 10px; }
+  .ai-ideas-btn:hover { background: rgba(139,92,246,.14); }
+  .ai-ideas-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .ai-ideas-wrap { background: rgba(139,92,246,.05); border: 1px solid rgba(139,92,246,.15); border-radius: var(--radius-lg); padding: 12px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .ai-ideas-header { font-size: 10px; font-weight: 700; color: #7c3aed; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 2px; }
+  .ai-idea-chip { display: flex; align-items: flex-start; gap: 8px; background: var(--bg-raised); border: 1px solid var(--border-light); border-radius: var(--radius); padding: 9px 11px; cursor: pointer; transition: all .15s; text-align: left; }
+  .ai-idea-chip:hover { border-color: rgba(139,92,246,.4); background: var(--bg-hover); }
+  .ai-idea-chip-text { font-size: 12px; color: var(--text); line-height: 1.45; flex: 1; }
+  .ai-idea-use { font-size: 11px; color: #8b5cf6; font-weight: 600; white-space: nowrap; flex-shrink: 0; }
+  .ai-ideas-loading { display: flex; align-items: center; gap: 8px; color: #7c3aed; font-size: 12px; padding: 4px 0; }
+  .ai-dot-spin { width: 14px; height: 14px; border: 2px solid rgba(139,92,246,.2); border-top-color: #8b5cf6; border-radius: 50%; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
-  /* PRESENCE STRIP */
-  .presence-strip { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: #0a0c12; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text-muted); flex-wrap: wrap; }
-  .presence-avatar { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: white; border: 2px solid white; box-shadow: 0 1px 4px rgba(0,0,0,.15); flex-shrink: 0; }
-  .presence-name { font-weight: 600; }
+  /* ── JOIN SCREEN ── */
+  .join-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--bg); }
+  .join-card { background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 16px; padding: 44px 36px; max-width: 420px; width: 100%; text-align: center; box-shadow: var(--shadow-lg); }
+  .join-logo { font-size: 14px; font-weight: 700; color: var(--text-muted); letter-spacing: .3px; margin-bottom: 28px; display: flex; align-items: center; justify-content: center; gap: 7px; }
+  .join-logo-dot { width: 7px; height: 7px; background: var(--red); border-radius: 50%; box-shadow: 0 0 8px var(--red); }
+  .join-sprint { display: inline-block; background: rgba(232,0,61,.08); color: var(--red); border: 1px solid rgba(232,0,61,.2); border-radius: 20px; padding: 3px 12px; font-size: 12px; font-weight: 600; margin-bottom: 18px; }
+  .join-title { font-size: 22px; font-weight: 700; color: var(--text); margin-bottom: 6px; letter-spacing: -.3px; }
+  .join-sub { color: var(--text-muted); font-size: 14px; margin-bottom: 28px; }
+  .join-input { width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); border-radius: var(--radius); padding: 12px 14px; font-family: inherit; font-size: 16px; font-weight: 500; color: var(--text); outline: none; transition: border .15s; text-align: center; margin-bottom: 10px; }
+  .join-input::placeholder { color: var(--text-dim); font-weight: 400; }
+  .join-input:focus { border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(99,102,241,.1); }
+  .join-btn { width: 100%; padding: 12px; background: var(--red); color: white; border: none; border-radius: var(--radius); font-family: inherit; font-size: 15px; font-weight: 600; cursor: pointer; transition: all .15s; }
+  .join-btn:hover { background: var(--red-dark); }
+  .join-btn:disabled { opacity: .35; cursor: not-allowed; }
+  .join-presence { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border); }
+  .join-presence-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); margin-bottom: 10px; }
+  .join-avatars { display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: wrap; }
+  .join-avatar { display: flex; align-items: center; gap: 5px; background: var(--bg-raised); border-radius: 20px; padding: 3px 9px 3px 3px; border: 1px solid var(--border); }
+  .join-avatar-dot { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: white; }
+  .join-avatar-name { font-size: 12px; font-weight: 500; color: var(--text); }
+  .join-q1-section { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border); text-align: left; }
+  .join-q1-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); margin-bottom: 6px; }
+  .join-q1-prompt { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 12px; }
+  .join-greeting { font-size: 36px; margin-bottom: 8px; }
+  .join-greeting-text { font-size: 15px; color: var(--text-muted); margin-bottom: 20px; }
+
+  /* ── BOARD ── */
+  .board-wrap { background: var(--bg); min-height: calc(100vh - 56px); overflow-x: auto; }
+
+  /* Presence strip */
+  .presence-strip { display: flex; align-items: center; gap: 6px; padding: 7px 20px; background: var(--bg-card); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text-muted); flex-wrap: wrap; }
+  .presence-avatar { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: white; flex-shrink: 0; }
+  .presence-name { font-weight: 500; font-size: 12px; }
+
+  /* Reaction bar */
+  .reaction-bar { display: flex; align-items: center; gap: 6px; padding: 8px 20px; background: var(--bg-card); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .reaction-bar-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); margin-right: 2px; }
+  .reaction-emoji-btn { width: 32px; height: 32px; border-radius: var(--radius); border: 1px solid var(--border-light); background: var(--bg-raised); font-size: 16px; cursor: pointer; transition: all .15s; display: flex; align-items: center; justify-content: center; }
+  .reaction-emoji-btn:hover { background: var(--bg-hover); border-color: var(--border-focus); transform: scale(1.15); }
+  .reaction-drop { position: fixed; pointer-events: none; font-size: 26px; z-index: 999; animation: float-up 2.2s ease-out forwards; }
+  @keyframes float-up { 0% { opacity:1; transform: translateY(0) scale(1); } 60% { opacity:.9; transform: translateY(-60px) scale(1.15); } 100% { opacity:0; transform: translateY(-120px) scale(.8); } }
+
+  /* Board toolbar */
+  .board-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+
+  /* Columns */
+  .col { width: 300px; flex-shrink: 0; }
+  .col-header { border-radius: var(--radius-lg) var(--radius-lg) 0 0; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; border-left: 3px solid transparent; }
+  .col-header-title { font-size: 12px; font-weight: 600; color: var(--text-muted); line-height: 1.4; letter-spacing: .01em; }
+  .col-body { background: var(--bg-card); border-radius: 0 0 var(--radius-lg) var(--radius-lg); padding: 10px; min-height: 200px; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border); border-top: none; }
+
+  /* Refined sticky cards — white/light with color bar */
+  .sticky { border-radius: var(--radius); padding: 12px 14px; background: #1e2333; border: 1px solid var(--border-light); border-left: 3px solid #555; cursor: pointer; transition: all .15s; position: relative; }
+  .sticky:hover { background: var(--bg-hover); border-color: var(--border-focus); transform: translateY(-1px); box-shadow: var(--shadow-md); }
+  .sticky-content { font-size: 13px; color: var(--text); line-height: 1.55; font-weight: 400; }
+  .sticky-emoji { font-size: 26px; text-align: center; padding: 4px; }
+  .sticky-author { font-size: 11px; color: var(--text-dim); margin-top: 8px; font-weight: 500; }
+  .sticky-group-badge { position: absolute; top: -5px; right: 8px; background: var(--bg-raised); color: var(--text-muted); border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; font-size: 10px; font-weight: 600; }
+
+  .group-block { background: rgba(255,255,255,.02); border: 1px dashed var(--border-light); border-radius: var(--radius-lg); padding: 8px; }
+  .group-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between; }
+  .group-label input { background: transparent; border: none; font: inherit; color: var(--text-muted); width: 120px; outline: none; font-size: 11px; }
+
+  .revealed-banner { background: rgba(16,185,129,.1); color: #34d399; text-align: center; padding: 6px; font-weight: 600; font-size: 12px; border-radius: var(--radius); margin-bottom: 6px; border: 1px solid rgba(16,185,129,.2); transition: opacity .5s; }
+  .revealed-banner.fade-out { opacity: 0; }
+
+  /* Action items column */
+  .action-check { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--border-focus); cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: all .15s; }
+  .action-check.done { background: var(--green); border-color: var(--green); color: white; font-size: 10px; }
+  .action-text { flex: 1; font-size: 13px; color: var(--text); min-width: 0; line-height: 1.4; }
+  .action-text.done { text-decoration: line-through; color: var(--text-dim); }
+  .action-owner { font-size: 11px; color: var(--blue); font-weight: 500; background: rgba(99,102,241,.1); padding: 1px 6px; border-radius: 6px; white-space: nowrap; flex-shrink: 0; }
+  .add-action-btn { padding: 6px 10px; background: var(--red); color: white; border: none; border-radius: var(--radius); font-weight: 600; cursor: pointer; font-size: 15px; flex-shrink: 0; transition: background .15s; }
+  .add-action-btn:hover { background: var(--red-dark); }
+
+  /* AI suggestion */
+  .ai-suggestion { background: rgba(99,102,241,.05); border: 1px solid rgba(99,102,241,.15); border-radius: var(--radius); padding: 10px; margin-top: 8px; }
+  .ai-suggestion-title { font-size: 10px; font-weight: 700; color: #6366f1; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+  .suggestion-item { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); cursor: pointer; border-radius: var(--radius); padding: 5px 7px; transition: background .15s; }
+  .suggestion-item:hover { background: rgba(99,102,241,.08); }
+  .suggestion-apply { font-size: 11px; color: #6366f1; font-weight: 600; margin-left: auto; }
+
+  /* History */
+  .history-wrap { max-width: 760px; margin: 0 auto; padding: 36px 24px; min-height: 100vh; }
+  .history-title { font-size: 22px; font-weight: 700; color: var(--text); margin-bottom: 20px; letter-spacing: -.3px; }
+  .history-card { background: var(--bg-card); border-radius: var(--radius-lg); padding: 20px 22px; margin-bottom: 10px; border: 1px solid var(--border); cursor: pointer; transition: all .15s; border-left: 3px solid var(--red); }
+  .history-card:hover { border-color: var(--border-focus); box-shadow: var(--shadow-md); transform: translateY(-1px); }
+  .history-sprint { font-size: 15px; font-weight: 600; color: var(--text); }
+  .history-meta { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+  .history-stats { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+  .stat-pill { background: var(--bg-raised); border: 1px solid var(--border); border-radius: 20px; padding: 3px 10px; font-size: 11px; font-weight: 500; color: var(--text-muted); }
+
+  /* User chip */
+  .user-chip { display: flex; align-items: center; gap: 5px; background: var(--bg-raised); border-radius: 20px; padding: 3px 10px 3px 3px; border: 1px solid var(--border); }
+  .user-chip-dot { width: 20px; height: 20px; border-radius: 50%; background: var(--red); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: white; }
+  .user-chip-name { font-size: 12px; font-weight: 500; color: var(--text); }
+  .user-chip-x { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 12px; padding: 0; margin-left: 2px; }
+  .user-chip-x:hover { color: var(--text); }
+
+  /* Facilitator badge */
+  .facilitator-badge { display: inline-flex; align-items: center; gap: 4px; background: rgba(232,0,61,.1); color: var(--red); border: 1px solid rgba(232,0,61,.2); border-radius: 20px; padding: 2px 8px; font-size: 10px; font-weight: 600; letter-spacing: .03em; }
 `;
 
-// ── Components ────────────────────────────────────────────────────────────────
+// ── GIF / Q1 ──────────────────────────────────────────────────────────────────
 
-// Giphy — uses Tenor API (no key needed, CORS-friendly) as primary, Giphy beta as fallback
 async function searchGifs(query) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
   try {
-    const res = await fetch(
-      `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(query)}&key=AIzaSyAyimkuYQYF_FXVALexPuGQctUWRURdCDY&limit=12&media_filter=gif`
-    );
+    const res = await fetch(`https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(query)}&key=${TENOR_KEY}&limit=12&media_filter=gif`, { signal: controller.signal });
+    clearTimeout(timeout);
     const data = await res.json();
-    if (data.results && data.results.length > 0) {
-      return data.results.map(r => ({
-        id: r.id,
-        title: r.content_description || query,
-        images: { fixed_height_small: { url: r.media_formats?.tinygif?.url || r.media_formats?.gif?.url } }
-      }));
-    }
-  } catch {}
-  // fallback to Giphy
+    if (data.results?.length > 0) return data.results.map(r => ({ id: r.id, title: r.content_description || query, images: { fixed_height_small: { url: r.media_formats?.tinygif?.url || r.media_formats?.gif?.url } } }));
+  } catch(e) { if (e.name !== "AbortError") console.warn("Tenor", e); clearTimeout(timeout); }
   try {
-    const res = await fetch(
-      `https://api.giphy.com/v1/gifs/search?api_key=Lat2X82BQoZI8UZnG0cHU2QnlITbWYr3&q=${encodeURIComponent(query)}&limit=12&rating=g`
-    );
-    const data = await res.json();
-    return data.data || [];
-  } catch {}
+    const res = await fetch(`https://api.giphy.com/v1/gifs/search?api_key=${GIPHY_KEY}&q=${encodeURIComponent(query)}&limit=12&rating=g`);
+    const data = await res.json(); return data.data || [];
+  } catch(e) { console.warn("Giphy", e); }
   return [];
 }
 
 function GifPicker({ value, onChange }) {
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [searched, setSearched] = useState(false);
-  const [showGrid, setShowGrid] = useState(!value);
-
-  const search = async () => {
-    if (!query.trim()) return;
-    setLoading(true);
-    setSearched(true);
-    const found = await searchGifs(query);
-    setResults(found);
-    setLoading(false);
-  };
-
-  const selectGif = (gif) => {
-    onChange({ url: gif.images.fixed_height_small.url, id: gif.id, title: gif.title });
-    setShowGrid(false);
-  };
-
-  if (value && !showGrid) {
-    return (
-      <div>
-        <div className="gif-selected-preview">
-          <img src={value.url} alt={value.title} />
-          <div className="gif-selected-preview-text">
-            <strong>GIF selected ✓</strong>
-            <span>{value.title || "Untitled"}</span>
-            <button className="gif-change-btn" onClick={() => setShowGrid(true)}>Change GIF</button>
-          </div>
-        </div>
-        <div className="giphy-attr">Powered by GIPHY</div>
-      </div>
-    );
-  }
-
+  const [query, setQuery] = useState(""); const [results, setResults] = useState([]); const [loading, setLoading] = useState(false); const [searched, setSearched] = useState(false); const [showGrid, setShowGrid] = useState(!value);
+  const search = async () => { if (!query.trim()) return; setLoading(true); setSearched(true); setResults(await searchGifs(query)); setLoading(false); };
+  const selectGif = (gif) => { onChange({ url: gif.images.fixed_height_small.url, id: gif.id, title: gif.title }); setShowGrid(false); };
+  if (value && !showGrid) return (<div><div className="gif-selected-preview"><img src={value.url} alt={value.title} /><div className="gif-selected-preview-text"><strong>GIF selected ✓</strong><span>{value.title || "Untitled"}</span><button className="gif-change-btn" onClick={() => setShowGrid(true)}>Change GIF</button></div></div><div className="giphy-attr">Powered by GIPHY</div></div>);
   return (
     <div className="gif-picker">
-      <div className="gif-search-row">
-        <input
-          className="gif-search-input"
-          placeholder="Search GIFs… e.g. 'exhausted', 'winning', 'chaos'"
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && search()}
-        />
-        <button className="gif-search-btn" onClick={search} disabled={loading || !query.trim()}>
-          {loading ? "..." : "Search"}
-        </button>
-      </div>
-      {loading && <div className="gif-loading">🔍 Searching GIPHY…</div>}
-      {!loading && searched && results.length === 0 && (
-        <div className="gif-empty">No GIFs found. Try different words!</div>
-      )}
-      {!loading && results.length > 0 && (
-        <>
-          <div className="gif-grid">
-            {results.map(gif => (
-              <div
-                key={gif.id}
-                className={`gif-item ${value?.id === gif.id ? "selected" : ""}`}
-                onClick={() => selectGif(gif)}
-              >
-                <img src={gif.images.fixed_height_small.url} alt={gif.title} loading="lazy" />
-                {value?.id === gif.id && <div className="gif-check">✓</div>}
-              </div>
-            ))}
-          </div>
-          <div className="giphy-attr">Powered by GIPHY</div>
-        </>
-      )}
-      {!searched && (
-        <div className="gif-empty">👆 Type something and hit Search to find GIFs</div>
-      )}
+      <div className="gif-search-row"><input className="gif-search-input" placeholder="Search GIFs…" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && search()} /><button className="gif-search-btn" onClick={search} disabled={loading || !query.trim()}>{loading ? "…" : "Search"}</button></div>
+      {loading && <div className="gif-loading">Searching…</div>}
+      {!loading && searched && results.length === 0 && <div className="gif-empty">No GIFs found.</div>}
+      {!loading && results.length > 0 && <><div className="gif-grid">{results.map(gif => (<div key={gif.id} className={`gif-item ${value?.id === gif.id ? "selected" : ""}`} onClick={() => selectGif(gif)}><img src={gif.images.fixed_height_small.url} alt={gif.title} loading="lazy" />{value?.id === gif.id && <div className="gif-check">✓</div>}</div>))}</div><div className="giphy-attr">Powered by GIPHY</div></>}
+      {!searched && <div className="gif-empty">Type something and hit Search</div>}
     </div>
   );
 }
@@ -552,984 +581,1061 @@ function GifPicker({ value, onChange }) {
 function Q1Picker({ value, onChange }) {
   const isGif = value && typeof value === "object";
   const [mode, setMode] = useState(isGif ? "gif" : "emoji");
-
-  const handleModeSwitch = (newMode) => {
-    setMode(newMode);
-    // Only clear if switching away from the current value's type
-    const currentIsGif = value && typeof value === "object";
-    if (newMode === "emoji" && currentIsGif) onChange("");
-    if (newMode === "gif" && !currentIsGif) onChange("");
-  };
-
+  const handleModeSwitch = (m) => { setMode(m); if (m === "emoji" && isGif) onChange(""); if (m === "gif" && !isGif) onChange(""); };
   return (
     <div>
       <div className="q1-mode-toggle">
-        <button className={`q1-mode-btn ${mode === "emoji" ? "active" : ""}`} onClick={() => handleModeSwitch("emoji")}>
-          😄 Emoji
-        </button>
-        <button className={`q1-mode-btn gif-mode ${mode === "gif" ? "active" : ""}`} onClick={() => handleModeSwitch("gif")}>
-          <span className={`toggle-switch ${mode === "gif" ? "on" : ""}`} />
-          🎬 GIF
-        </button>
+        <button className={`q1-mode-btn ${mode === "emoji" ? "active" : ""}`} onClick={() => handleModeSwitch("emoji")}>😄 Emoji</button>
+        <button className={`q1-mode-btn ${mode === "gif" ? "active" : ""}`} onClick={() => handleModeSwitch("gif")}><span className={`toggle-switch ${mode === "gif" ? "on" : ""}`} />🎬 GIF</button>
       </div>
-      {mode === "emoji" ? (
-        <div className="emoji-grid">
-          {EMOJIS.map(e => (
-            <button key={e} className={`emoji-btn ${value === e ? "selected" : ""}`} onClick={() => onChange(e)}>{e}</button>
-          ))}
-        </div>
-      ) : (
-        <GifPicker value={isGif ? value : null} onChange={onChange} />
-      )}
+      {mode === "emoji" ? <div className="emoji-grid">{EMOJIS.map(e => <button key={e} className={`emoji-btn ${value === e ? "selected" : ""}`} onClick={() => onChange(e)}>{e}</button>)}</div> : <GifPicker value={isGif ? value : null} onChange={onChange} />}
     </div>
   );
 }
 
+// ── StickyCard ────────────────────────────────────────────────────────────────
 
-function StickyCard({ card, hidden, onGroup, grouped, groupName }) {
+function StickyCard({ card, hidden, onGroup, grouped, groupName, revealed, currentUser, onVote, allowVoting, accentColor }) {
   const isGif = card.content && typeof card.content === "object" && card.content.url;
+  const votes = card.votes || {};
+  const myVote = votes[currentUser] || 0;
+  const netScore = Object.values(votes).reduce((sum, v) => sum + v, 0);
+  const upCount = Object.values(votes).filter(v => v === 1).length;
+  const downCount = Object.values(votes).filter(v => v === -1).length;
+  const handleVote = (e, dir) => { e.stopPropagation(); if (!revealed || !allowVoting) return; onVote(card.id, myVote === dir ? 0 : dir); };
+
   return (
-    <div className="sticky" style={{ background: card.color }} onClick={onGroup}>
+    <div className="sticky" style={{ borderLeftColor: accentColor || "#555" }} onClick={onGroup}>
       {grouped && <span className="sticky-group-badge">📌 {groupName}</span>}
       {card.type === "emoji" && !isGif && <div className="sticky-emoji">{card.content}</div>}
-      {card.type === "emoji" && isGif && !hidden && (
-        <div style={{ borderRadius: 6, overflow: "hidden", lineHeight: 0 }}>
-          <img src={card.content.url} alt="gif" style={{ width: "100%", borderRadius: 6 }} />
-        </div>
-      )}
+      {card.type === "emoji" && isGif && !hidden && <div style={{ borderRadius: 6, overflow: "hidden", lineHeight: 0 }}><img src={card.content.url} alt="gif" style={{ width: "100%", borderRadius: 6 }} /></div>}
       {card.type === "emoji" && isGif && hidden && <div className="sticky-emoji">🎬</div>}
       {card.type !== "emoji" && (
-        <div className="sticky-content">
-          {hidden ? "••••••••" : (
-            typeof card.content === "string" && card.content.startsWith("<")
-              ? <span dangerouslySetInnerHTML={{ __html: card.content }} />
-              : card.content
-          )}
-        </div>
+        <div className="sticky-content">{hidden ? <span style={{ color: "var(--text-dim)", letterSpacing: 2 }}>● ● ● ● ●</span> : (typeof card.content === "string" && card.content.startsWith("<") ? <span dangerouslySetInnerHTML={{ __html: card.content }} /> : card.content)}</div>
       )}
       {!hidden && <div className="sticky-author">— {card.author}</div>}
+      {revealed && allowVoting && (
+        <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 8, paddingTop: 7, borderTop: "1px solid var(--border)" }} onClick={e => e.stopPropagation()}>
+          <button onClick={e => handleVote(e, 1)} style={{ display: "flex", alignItems: "center", gap: 3, background: myVote === 1 ? "#ff4500" : "var(--bg-raised)", border: "1px solid var(--border-light)", borderRadius: 5, padding: "2px 7px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: myVote === 1 ? "white" : "var(--text-muted)", transition: "all .15s" }}>▲ {upCount > 0 ? upCount : ""}</button>
+          <button onClick={e => handleVote(e, -1)} style={{ display: "flex", alignItems: "center", gap: 3, background: myVote === -1 ? "#6366f1" : "var(--bg-raised)", border: "1px solid var(--border-light)", borderRadius: 5, padding: "2px 7px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: myVote === -1 ? "white" : "var(--text-muted)", transition: "all .15s" }}>▼ {downCount > 0 ? downCount : ""}</button>
+          {netScore !== 0 && <span style={{ fontSize: 11, fontWeight: 700, color: netScore > 0 ? "#ff4500" : "#6366f1", marginLeft: "auto" }}>{netScore > 0 ? "+" : ""}{netScore}</span>}
+        </div>
+      )}
     </div>
   );
 }
 
-// ── AI Ideas Generator ───────────────────────────────────────────────────────
+// ── AI Ideas ──────────────────────────────────────────────────────────────────
 
-async function fetchIdeas(question, sprintNumber) {
-  // Uses a simple word-association approach client-side — no API needed
+async function fetchIdeas(question) {
   const starters = {
-    achievements: [
-      `We finally shipped the feature that's been in progress for weeks — solid execution from the whole team.`,
-      `Collaboration was strong this sprint, but we need to be more realistic about what we can actually finish.`,
-      `The technical debt we paid down this sprint will save us significant time next quarter.`
-    ],
-    start: [
-      `Start doing async design reviews before sprint planning so we catch issues earlier.`,
-      `We should start time-boxing exploratory tasks — they tend to sprawl without a hard limit.`,
-      `Start sharing blockers in the standup channel same-day instead of waiting for the next sync.`
-    ],
-    stop: [
-      `Stop pulling in stretch tickets without checking team capacity first.`,
-      `Stop context-switching mid-sprint — it's killing our focus time.`,
-      `Stop leaving PRs open for more than 24 hours without a reviewer assigned.`
-    ],
-    continue: [
-      `Keep the daily standup short and focused — it's one of the few rituals that actually works.`,
-      `The pairing sessions this sprint were really effective, let's keep that going.`,
-      `Continue the async-first communication approach — it's reduced interruptions noticeably.`
-    ],
-    shoutout: [
-      `Shoutout to the folks who stayed focused even when things got chaotic mid-sprint.`,
-      `Big thanks to whoever documented that gnarly bug fix — future us will appreciate it.`,
-      `Recognition to the team for being proactive about unblocking each other this sprint.`
-    ],
-    default: [
-      `This sprint felt more focused than usual — the prep work beforehand really paid off.`,
-      `We need to get better at flagging risks earlier rather than discovering them at the end.`,
-      `One thing worth trying: a quick team check-in at the midpoint of each sprint.`
-    ]
+    achievements: ["We finally shipped the feature that's been in progress for weeks — solid execution from the whole team.", "Collaboration was strong this sprint, but we need to be more realistic about what we can actually finish.", "The technical debt we paid down this sprint will save us significant time next quarter."],
+    start: ["Start doing async design reviews before sprint planning so we catch issues earlier.", "We should start time-boxing exploratory tasks — they tend to sprawl without a hard limit.", "Start sharing blockers in the standup channel same-day instead of waiting for the next sync."],
+    stop: ["Stop pulling in stretch tickets without checking team capacity first.", "Stop context-switching mid-sprint — it's killing our focus time.", "Stop leaving PRs open for more than 24 hours without a reviewer assigned."],
+    continue: ["Keep the daily standup short and focused — it's one of the few rituals that actually works.", "The pairing sessions this sprint were really effective, let's keep that going.", "Continue the async-first communication approach — it's reduced interruptions noticeably."],
+    shoutout: ["Shoutout to the folks who stayed focused even when things got chaotic mid-sprint.", "Big thanks to whoever documented that gnarly bug fix — future us will appreciate it.", "Recognition to the team for being proactive about unblocking each other this sprint."],
+    default: ["This sprint felt more focused than usual — the prep work beforehand really paid off.", "We need to get better at flagging risks earlier rather than discovering them at the end.", "One thing worth trying: a quick team check-in at the midpoint of each sprint."]
   };
-
   const q = question.toLowerCase();
   let bank = starters.default;
-  if (q.includes("achiev") || q.includes("standout") || q.includes("win")) bank = starters.achievements;
+  if (q.includes("achiev") || q.includes("standout")) bank = starters.achievements;
   else if (q.includes("start")) bank = starters.start;
   else if (q.includes("stop")) bank = starters.stop;
   else if (q.includes("continue") || q.includes("working")) bank = starters.continue;
   else if (q.includes("shout") || q.includes("anything else")) bank = starters.shoutout;
-
-  // Shuffle slightly so it feels fresh each time
   return [...bank].sort(() => Math.random() - 0.5).slice(0, 3);
 }
 
-function AIIdeas({ question, sprintNumber, onSelect }) {
-  const [ideas, setIdeas] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [shown, setShown] = useState(false);
-
-  const generate = async () => {
-    setLoading(true);
-    setShown(true);
-    try {
-      const result = await fetchIdeas(question, sprintNumber);
-      setIdeas(result);
-    } catch {
-      setIdeas(["Something went wrong — try again or write your own!"]);
-    }
-    setLoading(false);
-  };
-
-  const regenerate = () => {
-    setIdeas([]);
-    generate();
-  };
-
-  if (!shown) {
-    return (
-      <button className="ai-ideas-btn" onClick={generate}>
-        ✨ Give me ideas
-      </button>
-    );
-  }
-
+function AIIdeas({ question, onSelect }) {
+  const [ideas, setIdeas] = useState([]); const [loading, setLoading] = useState(false); const [shown, setShown] = useState(false);
+  const generate = async () => { setLoading(true); setShown(true); try { setIdeas(await fetchIdeas(question)); } catch(e) { console.warn(e); setIdeas([]); } setLoading(false); };
+  if (!shown) return <button className="ai-ideas-btn" onClick={generate}>✨ Give me ideas</button>;
   return (
-    <div style={{ marginBottom: 12 }}>
-      <button className="ai-ideas-btn" onClick={regenerate} disabled={loading}>
-        ✨ {loading ? "Generating…" : "Refresh ideas"}
-      </button>
-      {loading ? (
-        <div className="ai-ideas-wrap">
-          <div className="ai-ideas-loading">
-            <div className="ai-dot-spin" />
-            Thinking of some starters for you…
-          </div>
-        </div>
-      ) : ideas.length > 0 ? (
-        <div className="ai-ideas-wrap">
-          <div className="ai-ideas-header">✨ Starter ideas — click to use</div>
-          {ideas.map((idea, i) => (
-            <button key={i} className="ai-idea-chip" onClick={() => onSelect(idea)}>
-              <span className="ai-idea-chip-text">{idea}</span>
-              <span className="ai-idea-use">Use this →</span>
-            </button>
-          ))}
-        </div>
-      ) : null}
+    <div style={{ marginBottom: 10 }}>
+      <button className="ai-ideas-btn" onClick={() => { setIdeas([]); generate(); }} disabled={loading}>✨ {loading ? "Generating…" : "Refresh ideas"}</button>
+      {loading ? <div className="ai-ideas-wrap"><div className="ai-ideas-loading"><div className="ai-dot-spin" />Thinking…</div></div>
+        : ideas.length > 0 && <div className="ai-ideas-wrap"><div className="ai-ideas-header">Starter ideas — click to use</div>{ideas.map((idea, i) => <button key={i} className="ai-idea-chip" onClick={() => onSelect(idea)}><span className="ai-idea-chip-text">{idea}</span><span className="ai-idea-use">Use →</span></button>)}</div>}
     </div>
   );
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// In production this would be a real URL. Here we simulate with a token.
-function generateEditToken() {
-  return uid() + uid();
-}
+const submissionsStore = {
+  async save(token, data) {
+    try { localStorage.setItem("rk_sub_" + token, JSON.stringify(data)); } catch(e) { console.warn(e); }
+    if (supabase) {
+      // Use name+session_id as the natural key so edits replace rather than duplicate
+      // First delete any existing submission with same name+session to avoid duplicates
+      await supabase.from("submissions").delete()
+        .eq("session_id", data.sessionId).eq("name", data.name).neq("id", token);
+      const { error } = await supabase.from("submissions").upsert({
+        id: token, session_id: data.sessionId, name: data.name,
+        answers: data.answers, submitted_at: data.submittedAt
+      });
+      if (error) console.warn("Supabase submission save:", error.message);
+    }
+  },
+  get(token) { try { return JSON.parse(localStorage.getItem("rk_sub_" + token) || "null"); } catch(e) { console.warn(e); return null; } }
+};
+function generateEditToken() { return uid(); }
 
-// Simulate cutoff: 5 mins before a fixed retro time. For demo, always open.
-function isSubmissionOpen() {
-  return true; // In production: return new Date() < cutoffTime
-}
-
-function CopyButton({ text }) {
+function CopyButton({ text, label = "Copy Link" }) {
   const [copied, setCopied] = useState(false);
-  const copy = () => {
-    navigator.clipboard.writeText(text).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text); } catch { try { const ta = document.createElement("textarea"); ta.value = text; ta.style.cssText = "position:fixed;opacity:0"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta); } catch(e) { console.warn(e); } }
+    setCopied(true); setTimeout(() => setCopied(false), 2000);
   };
-  return (
-    <button className={`copy-btn ${copied ? "copied" : ""}`} onClick={copy}>
-      {copied ? "✓ Copied!" : "Copy Link"}
-    </button>
-  );
+  return <button className={`copy-btn ${copied ? "copied" : ""}`} onClick={copy}>{copied ? "✓ Copied!" : label}</button>;
 }
 
 function ConfirmModal({ answers, questions, onConfirm, onCancel }) {
-  const getAnswerPreview = (q) => {
-    const val = answers[q.id];
-    if (!val || val === "") return null;
-    if (typeof val === "object" && val.url) return "GIF: " + (val.title || "selected");
-    return val;
-  };
-
+  const getPreview = (q) => { const val = answers[q.id]; if (!val) return null; if (typeof val === "object" && val.url) return "GIF: " + (val.title || "selected"); return val; };
   return (
-    <div className="modal-overlay">
-      <div className="modal" style={{ maxWidth: 540 }}>
-        <h2>Ready to submit? 🚀</h2>
-        <p>Here's a summary of your responses. You can go back to make changes, or submit now.</p>
-        <div className="confirm-summary">
-          {questions.map(q => {
-            const preview = getAnswerPreview(q);
-            return (
-              <div key={q.id} className="confirm-row">
-                <span className="confirm-q-label" style={{ background: q.color }}>{q.label}</span>
-                <span className={`confirm-answer ${!preview ? "empty" : ""}`}>
-                  {preview || "No response"}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-        <div className="modal-btns">
-          <button className="tool-btn" onClick={onCancel}>← Go Back</button>
-          <button className="tool-btn primary" onClick={onConfirm}>Yes, Submit →</button>
-        </div>
-      </div>
+    <div className="modal-overlay"><div className="modal">
+      <h2>Ready to submit?</h2><p>Here's a summary of your responses.</p>
+      <div className="confirm-summary">{questions.map(q => { const p = getPreview(q); return (<div key={q.id} className="confirm-row"><span className="confirm-q-label" style={{ background: q.color }}>{q.label}</span><span className={`confirm-answer ${!p ? "empty" : ""}`}>{p || "No response"}</span></div>); })}</div>
+      <div className="modal-btns"><button className="btn btn-secondary" onClick={onCancel}>← Go Back</button><button className="btn btn-primary" onClick={onConfirm}>Submit →</button></div>
+    </div></div>
+  );
+}
+
+function EditLinkBox({ token }) {
+  const base = window.location.origin + window.location.pathname.replace(/\?.*$/, "");
+  const sessionParam = new URLSearchParams(window.location.search).get("session");
+  const editUrl = `${base}?${sessionParam ? "session=" + sessionParam + "&" : ""}edit=${token}`;
+  return (
+    <div className="edit-link-box"><h3>🔗 Your edit link</h3><p>Save this to update your responses before the cutoff.</p>
+      <div className="edit-link-copy-row"><div className="edit-link-url" title={editUrl}>{editUrl}</div><CopyButton text={editUrl} /></div>
     </div>
   );
 }
 
-function EditLinkBox({ token, sprintNumber, cutoff }) {
-  const basePath = window.location.origin + window.location.pathname.replace(/\?.*$/, '');
-  const editUrl = `${basePath}?edit=${token}&sprint=${sprintNumber}`;
-  const ms = useCountdown(cutoff);
-  const { state } = relaxedLabel(ms);
-  const exact = exactTime(ms);
-  const stateColors = { open: "#5cb85c", soon: "#e8a020", urgent: "#ff4444", closed: "#666" };
-  const color = stateColors[state] || "#666";
-  return (
-    <div className="edit-link-box">
-      <h3>🔗 Your personal edit link</h3>
-      <p>
-        Save this link to come back and update your responses before the cutoff.
-        Bookmark it or paste it somewhere safe.
-      </p>
-      <div className="edit-link-copy-row">
-        <div className="edit-link-url" title={editUrl}>{editUrl}</div>
-        <CopyButton text={editUrl} />
-      </div>
-      <div className="cutoff-notice" style={{ color, display: "flex", alignItems: "center", gap: 6 }}>
-        ⏰ {ms <= 0 ? "Submissions are now closed" : <>Submissions close in <strong style={{ fontFamily: "'Libre Franklin', sans-serif", letterSpacing: 1 }}>{exact}</strong></>}
-      </div>
-    </div>
-  );
-}
+// ── Rich Text Editor ──────────────────────────────────────────────────────────
 
-// ── Rich Text Editor ─────────────────────────────────────────────────────────
-
-const ALL_EMOJIS = [
-  "😀","😂","🥲","😍","🤩","😎","🤔","😬","😅","🙌","👏","🔥","💯","🚀","⚡","🎯",
-  "💪","🧠","💡","✅","❌","⚠️","📌","🔧","🐛","🎉","🏆","🌱","🌊","💥","🤝","👀",
-  "😤","😮","🥳","🫠","😵","🤯","💀","🙏","👋","✊","🫡","🎸","🌀","⏰","📊","🗓️",
-  "💬","📝","🔗","🔑","🚧","🛠️","📦","🧩","🎲","🪄","🫶","❤️","💙","💚","💛","🖤"
-];
+const ALL_EMOJIS = ["😀","😂","🥲","😍","🤩","😎","🤔","😬","😅","🙌","👏","🔥","💯","🚀","⚡","🎯","💪","🧠","💡","✅","❌","⚠️","📌","🔧","🐛","🎉","🏆","🌱","🌊","💥","🤝","👀","😤","😮","🥳","🫠","😵","🤯","💀","🙏","👋","✊","🫡","🎸","🌀","⏰","📊","🗓️","💬","📝","🔗","🔑","🚧","🛠️","📦","🧩","🎲","🪄","🫶","❤️","💙","💚","💛","🖤"];
 
 function EmojiPopup({ onSelect, onClose }) {
   const [search, setSearch] = useState("");
-  const filtered = search
-    ? ALL_EMOJIS.filter(e => e.includes(search))
-    : ALL_EMOJIS;
-
-  useEffect(() => {
-    const handler = (e) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [onClose]);
-
-  return (
-    <div className="emoji-popup">
-      <input
-        className="emoji-popup-search"
-        placeholder="Search emoji…"
-        value={search}
-        onChange={e => setSearch(e.target.value)}
-        autoFocus
-      />
-      <div className="emoji-popup-grid">
-        {filtered.map((e, i) => (
-          <div key={i} className="emoji-popup-item" onClick={() => { onSelect(e); onClose(); }}>{e}</div>
-        ))}
-      </div>
-    </div>
-  );
+  const filtered = search ? ALL_EMOJIS.filter(e => e.includes(search)) : ALL_EMOJIS;
+  useEffect(() => { const h = e => { if (e.key === "Escape") onClose(); }; document.addEventListener("keydown", h); return () => document.removeEventListener("keydown", h); }, [onClose]);
+  return (<div className="emoji-popup"><input className="emoji-popup-search" placeholder="Search emoji…" value={search} onChange={e => setSearch(e.target.value)} autoFocus /><div className="emoji-popup-grid">{filtered.map((e, i) => <div key={i} className="emoji-popup-item" onClick={() => { onSelect(e); onClose(); }}>{e}</div>)}</div></div>);
 }
 
 function RichTextEditor({ value, onChange, placeholder, injectText }) {
-  const editorRef = useRef(null);
-  const [showEmoji, setShowEmoji] = useState(false);
-  const [activeFormats, setActiveFormats] = useState({ bold: false, italic: false, list: false });
-  const prevInjectRef = useRef(injectText);
-
-  // Sync value into editor on first mount only
+  const editorRef = useRef(null); const [showEmoji, setShowEmoji] = useState(false); const [activeFormats, setActiveFormats] = useState({ bold: false, italic: false, list: false }); const lastInjectedRef = useRef("");
+  useEffect(() => { if (editorRef.current && value && editorRef.current.innerHTML === "") editorRef.current.innerHTML = value; }, []);
   useEffect(() => {
-    if (editorRef.current && value && editorRef.current.innerHTML === "") {
-      editorRef.current.innerHTML = value;
-    }
-  }, []);
-
-  // When injectText changes (AI idea selected), set it into the editor
-  useEffect(() => {
-    if (injectText && injectText !== prevInjectRef.current && editorRef.current) {
-      editorRef.current.innerHTML = injectText;
-      onChange(injectText);
-      prevInjectRef.current = injectText;
-      editorRef.current.focus();
-      // Move cursor to end
-      const range = document.createRange();
-      const sel = window.getSelection();
-      range.selectNodeContents(editorRef.current);
-      range.collapse(false);
-      sel.removeAllRanges();
-      sel.addRange(range);
-    }
+    if (!injectText || !editorRef.current) return;
+    const clean = injectText.replace(/_\d+$/, "");
+    if (clean === lastInjectedRef.current) return;
+    lastInjectedRef.current = clean; editorRef.current.innerHTML = clean; onChange(clean); editorRef.current.focus();
+    const range = document.createRange(); const sel = window.getSelection(); range.selectNodeContents(editorRef.current); range.collapse(false); sel.removeAllRanges(); sel.addRange(range);
   }, [injectText]);
-
-  const exec = (cmd, val = null) => {
-    editorRef.current.focus();
-    document.execCommand(cmd, false, val);
-    syncFormats();
-    emitChange();
-  };
-
-  const syncFormats = () => {
-    setActiveFormats({
-      bold: document.queryCommandState("bold"),
-      italic: document.queryCommandState("italic"),
-      list: document.queryCommandState("insertUnorderedList"),
-    });
-  };
-
+  const exec = cmd => { editorRef.current.focus(); document.execCommand(cmd, false, null); syncFormats(); emitChange(); };
+  const syncFormats = () => setActiveFormats({ bold: document.queryCommandState("bold"), italic: document.queryCommandState("italic"), list: document.queryCommandState("insertUnorderedList") });
   const emitChange = () => {
-    if (editorRef.current) onChange(editorRef.current.innerHTML);
+    if (!editorRef.current) return;
+    // Strip wrapping <div> tags added by contentEditable
+    let html = editorRef.current.innerHTML;
+    // If content is just a single div with no formatting, unwrap it
+    if (html.startsWith("<div>") && html.endsWith("</div>") && !html.slice(5, -6).includes("<div>")) {
+      html = html.slice(5, -6);
+    }
+    onChange(html);
   };
-
-  const insertEmoji = (emoji) => {
-    editorRef.current.focus();
-    document.execCommand("insertText", false, emoji);
-    emitChange();
-  };
-
+  const insertEmoji = emoji => { editorRef.current.focus(); document.execCommand("insertText", false, emoji); emitChange(); };
   return (
     <div className="rte-wrap">
       <div className="rte-toolbar">
-        <button className={`rte-btn ${activeFormats.bold ? "active" : ""}`} onMouseDown={e => { e.preventDefault(); exec("bold"); }} title="Bold (⌘B)"><b>B</b></button>
-        <button className={`rte-btn ${activeFormats.italic ? "active" : ""}`} onMouseDown={e => { e.preventDefault(); exec("italic"); }} title="Italic (⌘I)"><i>I</i></button>
+        <button className={`rte-btn ${activeFormats.bold ? "active" : ""}`} onMouseDown={e => { e.preventDefault(); exec("bold"); }}><b>B</b></button>
+        <button className={`rte-btn ${activeFormats.italic ? "active" : ""}`} onMouseDown={e => { e.preventDefault(); exec("italic"); }}><i>I</i></button>
         <div className="rte-divider" />
-        <button className={`rte-btn ${activeFormats.list ? "active" : ""}`} onMouseDown={e => { e.preventDefault(); exec("insertUnorderedList"); }} title="Bullet list">≡</button>
+        <button className={`rte-btn ${activeFormats.list ? "active" : ""}`} onMouseDown={e => { e.preventDefault(); exec("insertUnorderedList"); }}>≡</button>
         <div className="rte-divider" />
-        <button className="rte-btn rte-emoji-btn" onMouseDown={e => { e.preventDefault(); setShowEmoji(s => !s); }} title="Insert emoji">😊</button>
+        <button className="rte-btn rte-emoji-btn" onMouseDown={e => { e.preventDefault(); setShowEmoji(s => !s); }}>😊</button>
       </div>
-      <div
-        ref={editorRef}
-        className="rte-editor"
-        contentEditable
-        suppressContentEditableWarning
-        data-placeholder={placeholder || "Type your response…"}
-        onInput={emitChange}
-        onKeyUp={syncFormats}
-        onMouseUp={syncFormats}
-        onKeyDown={e => {
-          if ((e.metaKey || e.ctrlKey) && e.key === "b") { e.preventDefault(); exec("bold"); }
-          if ((e.metaKey || e.ctrlKey) && e.key === "i") { e.preventDefault(); exec("italic"); }
-        }}
-      />
-      {showEmoji && (
-        <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 300 }}>
-          <EmojiPopup onSelect={insertEmoji} onClose={() => setShowEmoji(false)} />
-        </div>
-      )}
+      <div ref={editorRef} className="rte-editor" contentEditable suppressContentEditableWarning data-placeholder={placeholder || "Type your response…"} onInput={emitChange} onKeyUp={syncFormats} onMouseUp={syncFormats} onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === "b") { e.preventDefault(); exec("bold"); } if ((e.metaKey || e.ctrlKey) && e.key === "i") { e.preventDefault(); exec("italic"); } }} />
+      {showEmoji && <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 300 }}><EmojiPopup onSelect={insertEmoji} onClose={() => setShowEmoji(false)} /></div>}
     </div>
   );
 }
 
 // ── Submit View ───────────────────────────────────────────────────────────────
 
-// Submissions store backed by localStorage so edit links survive page reload
-const submissionsStore = {
-  get(token) {
-    try { return JSON.parse(localStorage.getItem("rk_sub_" + token) || "null"); } catch { return null; }
-  },
-  set(token, data) {
-    try { localStorage.setItem("rk_sub_" + token, JSON.stringify(data)); } catch {}
-  }
-};
-
-function SubmitView({ sprintNumber, questions, currentUser, cutoff, joinQ1 }) {
-  questions = questions || QUESTIONS(sprintNumber);
-  cutoff = cutoff || DEMO_CUTOFF;
-
-  // Check for edit token in URL params (simulated)
+function SubmitView({ session, questions, currentUser, joinQ1 }) {
   const urlParams = new URLSearchParams(window.location.search);
   const editToken = urlParams.get("edit");
   const existingSubmission = editToken ? submissionsStore.get(editToken) : null;
-
-  const [name, setName] = useState(existingSubmission ? existingSubmission.name : (currentUser || ""));
-  const [answers, setAnswers] = useState(
-    existingSubmission ? existingSubmission.answers : { q1: joinQ1 || "", q2: "", q3: "", q4: "" }
-  );
+  const isOpen = sessionStore.isSubmissionOpen(session);
+  const [name, setName] = useState(existingSubmission?.name || currentUser || "");
+  const [answers, setAnswers] = useState(existingSubmission?.answers || { q1: joinQ1 || "", q2: "", q3: "", q4: "" });
   const [injected, setInjected] = useState({ q1: "", q2: "", q3: "", q4: "" });
-
-  const injectIdea = (qId, text) => {
-    setAnswer(qId, text);
-    setInjected(i => ({ ...i, [qId]: text + "_" + Date.now() })); // unique to trigger effect
-  };
-  const [showConfirm, setShowConfirm] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false); const [submitted, setSubmitted] = useState(false);
   const [editLink, setEditLink] = useState(existingSubmission ? { token: editToken } : null);
   const [exited, setExited] = useState(false);
   const isEditing = !!existingSubmission;
-  const isOpen = isSubmissionOpen();
-
-  // Exit without saving — clear edit param from URL and go back to fresh form
-  const handleExit = () => {
-    try { window.history.replaceState({}, "", window.location.href.split("?")[0]); } catch {}
-    setExited(true);
-  };
-
+  const handleExit = () => { try { window.history.replaceState({}, "", window.location.href.split("?")[0]); } catch(e) { console.warn(e); } setExited(true); };
+  if (exited) return <div className="submit-wrap"><div className="success-wrap"><div className="success-icon">👋</div><h2>No changes made</h2><p>Your original responses are still saved.</p></div></div>;
   const setAnswer = (id, val) => setAnswers(a => ({ ...a, [id]: val }));
-  const canSubmit = name.trim(); // all questions are optional
-
-  const handleSubmit = () => {
+  const injectIdea = (qId, text) => { setAnswer(qId, text); setInjected(i => ({ ...i, [qId]: text })); };
+  const handleSubmit = async () => {
     const token = editToken || generateEditToken();
-    submissionsStore.set(token, { name: name.trim(), answers, sprintNumber, submittedAt: new Date().toISOString() });
-    setEditLink({ token });
-    setSubmitted(true);
-    setShowConfirm(false);
+    try {
+      await submissionsStore.save(token, { name: name.trim(), answers, sprintNumber: session.sprintNumber, sessionId: session.id, submittedAt: new Date().toISOString() });
+    } catch(e) {
+      console.warn("submit error:", e);
+      // Save to localStorage even if Supabase fails
+      try { localStorage.setItem("rk_sub_" + token, JSON.stringify({ name: name.trim(), answers, sprintNumber: session.sprintNumber, sessionId: session.id, submittedAt: new Date().toISOString() })); } catch {}
+    }
+    setEditLink({ token }); setSubmitted(true); setShowConfirm(false);
   };
-
-  // Exited without saving
-  if (exited) return (
-    <div className="submit-wrap">
-      <div className="success-wrap">
-        <div className="success-icon">👋</div>
-        <h2>No changes made</h2>
-        <p>Your original responses are still saved.</p>
-        {editToken && <EditLinkBox token={editToken} sprintNumber={sprintNumber} cutoff={cutoff} />}
-      </div>
-    </div>
-  );
-
-  // Closed state
-  if (!isOpen && !isEditing) return (
-    <div className="submit-wrap">
-      <div className="closed-wrap">
-        <div style={{ fontSize: 64 }}>🔒</div>
-        <h2>Submissions are closed</h2>
-        <p>The deadline has passed. See you at the retro!</p>
-      </div>
-    </div>
-  );
-
-  // Success state
-  if (submitted) return (
-    <div className="submit-wrap">
-      <div className="success-wrap">
-        <div className="success-icon">{isEditing ? "✏️" : "🎉"}</div>
-        <h2>{isEditing ? "Responses updated!" : "You're all set!"}</h2>
-        <p>Your responses have been saved.<br />See you at the retro!</p>
-        {editLink && <EditLinkBox token={editLink.token} sprintNumber={sprintNumber} cutoff={cutoff} />}
-      </div>
-    </div>
-  );
-
+  if (submitted) return <div className="submit-wrap"><div className="success-wrap"><div className="success-icon">{isEditing ? "✏️" : "🎉"}</div><h2>{isEditing ? "Responses updated!" : "You're all set!"}</h2><p>Your responses have been saved. See you at the retro!</p>{editLink && <EditLinkBox token={editLink.token} />}</div></div>;
   return (
     <div className="submit-wrap">
-      {showConfirm && (
-        <ConfirmModal
-          answers={answers}
-          questions={questions}
-          onConfirm={handleSubmit}
-          onCancel={() => setShowConfirm(false)}
-        />
-      )}
-
+      {showConfirm && <ConfirmModal answers={answers} questions={questions} onConfirm={handleSubmit} onCancel={() => setShowConfirm(false)} />}
       <div className="submit-header">
-        <h1>Sprint {sprintNumber} Retro</h1>
-        <p>Share your thoughts before the meeting — responses are visible to the team after reveal.</p>
-        <div className="anon-badge">👥 Responses visible to team after reveal</div>
+        <h1>{session.name} · Sprint {session.sprintNumber}</h1>
+        <p>Share your thoughts before the meeting.</p>
+        <div className="anon-badge">👥 Responses visible after reveal</div>
       </div>
-
+      {!isOpen && <div className="closed-banner">🔒 Submissions are closed for this session.</div>}
       <div className="name-card">
         <div className="name-card-label">Your name</div>
         <div className="name-card-title">Who's submitting?</div>
-        <input
-          className="name-input"
-          placeholder="First name or display name…"
-          value={name}
-          onChange={e => setName(e.target.value)}
-          maxLength={30}
-        />
+        <input className="input" placeholder="First name or display name…" value={name} onChange={e => setName(e.target.value)} maxLength={30} />
       </div>
-
-      {isEditing && (
-        <div className="editing-banner" style={{ justifyContent: "space-between" }}>
-          <span>✏️ You're <strong>editing</strong> your previous responses. Changes will replace your original submission.</span>
-          <button onClick={handleExit} style={{ background: "none", border: "1px solid var(--border-light)", borderRadius: 6, padding: "4px 10px", color: "var(--text-muted)", fontSize: 12, cursor: "pointer", whiteSpace: "nowrap", marginLeft: 12 }}>Exit without saving</button>
-        </div>
-      )}
-
+      {isEditing && <div className="editing-banner">✏️ You're editing your previous responses.</div>}
       {questions.map(q => (
         <div key={q.id} className="q-card" style={{ borderLeftColor: q.color }}>
           <div className="q-label" style={{ color: q.color }}>{q.label}</div>
           <div className="q-prompt">{q.prompt}</div>
-          {q.type === "emoji" ? (
-            <>
-              {joinQ1 && answers[q.id] === joinQ1 && (
-                <div style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(16,185,129,.1)", border: "1px solid rgba(16,185,129,.2)", borderRadius: 6, padding: "6px 10px", marginBottom: 12, fontSize: 12, color: "var(--green)" }}>
-                  ✓ Pre-filled from your join screen — feel free to change it
-                </div>
-              )}
-              <Q1Picker value={answers[q.id]} onChange={v => setAnswer(q.id, v)} />
-            </>
-          ) : (
-            <>
-              <AIIdeas
-                question={q.prompt}
-                sprintNumber={sprintNumber}
-                onSelect={idea => injectIdea(q.id, idea)}
-              />
-              <RichTextEditor
-                value={answers[q.id]}
-                onChange={v => setAnswer(q.id, v)}
-                placeholder="Type your response, or pick a starter above and edit it…"
-                injectText={injected[q.id]}
-              />
-            </>
-          )}
+          {q.type === "emoji" ? <Q1Picker value={answers[q.id]} onChange={v => setAnswer(q.id, v)} /> : (<><AIIdeas question={q.prompt} onSelect={idea => injectIdea(q.id, idea)} /><RichTextEditor value={answers[q.id]} onChange={v => setAnswer(q.id, v)} placeholder="Type your response…" injectText={injected[q.id]} /></>)}
         </div>
       ))}
-
-      <button className="submit-btn" disabled={!canSubmit} onClick={() => setShowConfirm(true)}>
-        {isEditing ? "Update My Responses →" : "Review & Submit →"}
-      </button>
+      <div className="submit-actions">
+        {isEditing && <button className="exit-btn" onClick={handleExit}>← Exit without saving</button>}
+        <button className="submit-btn" style={{ flex: 1 }} disabled={!name.trim() || (!isOpen && !isEditing)} onClick={() => setShowConfirm(true)}>{isEditing ? "Update Responses →" : "Review & Submit →"}</button>
+      </div>
     </div>
   );
+}
+
+// ── Export ────────────────────────────────────────────────────────────────────
+
+function exportCSV({ session, questions, cards, freeCards, actionItems }) {
+  const escape = val => { const s = typeof val === "object" && val?.url ? `[GIF: ${val.title || "gif"}]` : String(val ?? ""); return `"${s.replace(/"/g, '""')}"`; };
+  const netVotes = card => Object.values(card.votes || {}).reduce((sum, x) => sum + x, 0);
+  const rows = [["Section","Question","Author","Content","Net Votes"]];
+  questions.forEach(q => { cards.filter(c => c.qId === q.id).forEach(c => rows.push([q.label, q.prompt, c.author, c.content, netVotes(c)])); });
+  freeCards.forEach(c => rows.push(["Free Card","",c.author, c.content, netVotes(c)]));
+  actionItems.forEach(item => rows.push(["Action Item","", item.owner, item.text, item.done ? "Done" : "Open"]));
+  const csv = rows.map(r => r.map(escape).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `${session.name || "retro"}-sprint${session.sprintNumber}.csv`.replace(/\s+/g, "-").toLowerCase(); a.click(); URL.revokeObjectURL(url);
 }
 
 // ── Board View ────────────────────────────────────────────────────────────────
 
 const AI_SUGGESTIONS = {
-  q3: [
-    { label: "Blockers & friction", cards: ["Unplanned interruptions", "ticket grooming"] },
-    { label: "Process improvements", cards: ["async design reviews", "sprint planning"] },
-  ],
-  q2: [
-    { label: "Wins", cards: ["dashboard", "CI/CD", "zero bugs"] },
-  ],
+  q3: [{ label: "Blockers & friction", cards: ["Unplanned interruptions", "ticket grooming"] }, { label: "Process improvements", cards: ["async design reviews", "sprint planning"] }],
+  q2: [{ label: "Wins", cards: ["dashboard", "CI/CD", "zero bugs"] }],
 };
-
 const REACTION_EMOJIS = ["🔥","💯","👏","😅","🚀","💡","🤔","😬","🙌","❤️","😂","👀"];
-const AVATAR_COLORS = ["#D3002D","#1a73e8","#188038","#e37400","#7b1fa2","#0097a7","#c62828","#2e7d32"];
 
-function BoardView({ sprintNumber, members, questions, currentUser, currentVibe }) {
-  questions = questions || QUESTIONS(sprintNumber);
-  const [cards, setCards] = useState(() => {
-    // Load real submissions from localStorage
-    try {
-      const keys = Object.keys(localStorage).filter(k => k.startsWith("rk_sub_"));
-      const subs = keys.map(k => JSON.parse(localStorage.getItem(k))).filter(s => s && s.sprintNumber === sprintNumber);
-      if (subs.length > 0) {
-        return subs.flatMap(sub =>
-          Object.entries(sub.answers)
-            .filter(([, val]) => val)
-            .map(([qId, content]) => ({
-              id: uid(),
-              qId,
-              content,
-              author: sub.name,
-              color: CARD_COLORS[Math.floor(Math.random() * CARD_COLORS.length)],
-              groupId: null,
-              type: qId === "q1" ? "emoji" : "text"
-            }))
-        );
-      }
-    } catch {}
-    return seedCards(sprintNumber);
-  });
-  const [revealed, setRevealed] = useState(false);
-  const [groups, setGroups] = useState({});
-  const [actionItems, setActionItems] = useState([
-    { id: uid(), text: "Set up async design review process", owner: "Sam", done: false },
-    { id: uid(), text: "Add ticket grooming to sprint planning agenda", owner: "Riley", done: false },
-  ]);
-  const [newAction, setNewAction] = useState("");
-  const [newOwner, setNewOwner] = useState("");
-  const [showAI, setShowAI] = useState(null);
-  const [groupingCard, setGroupingCard] = useState(null);
-  const [newGroupName, setNewGroupName] = useState("");
-  const [reactions, setReactions] = useState([]);
-  const teamMembers = members && members.length ? members : ["Alex", "Sam", "Jordan", "Riley"];
-  const [presence] = useState(() =>
-    teamMembers.filter(Boolean).map((m, i) => ({ name: typeof m === "object" ? m.name : m, vibe: typeof m === "object" ? m.vibe : null, color: AVATAR_COLORS[i % AVATAR_COLORS.length] }))
+function FreeCard({ card, onDragStart, onEdit, onDelete }) {
+  const [editing, setEditing] = useState(false); const [text, setText] = useState(card.content); const [showEmoji, setShowEmoji] = useState(false); const editorRef = useRef(null);
+  const handleDoubleClick = e => { e.stopPropagation(); setEditing(true); setTimeout(() => editorRef.current?.focus(), 0); };
+  const handleBlur = () => { setEditing(false); setShowEmoji(false); onEdit(card.id, text); };
+  const insertEmoji = emoji => { setText(t => t + emoji); setShowEmoji(false); setTimeout(() => editorRef.current?.focus(), 0); };
+  return (
+    <div style={{ position: "absolute", left: card.x, top: card.y, width: 200, background: "#1e2333", border: `1px solid ${card.color}40`, borderLeft: `3px solid ${card.color}`, borderRadius: 8, padding: "12px 14px", boxShadow: "0 4px 12px rgba(0,0,0,.4)", cursor: editing ? "text" : "grab", userSelect: "none", zIndex: editing ? 50 : 10 }}
+      onMouseDown={e => { if (editing) return; e.preventDefault(); onDragStart(e, card.id); }} onDoubleClick={handleDoubleClick}>
+      {!editing && (
+        <button onMouseDown={e => { e.stopPropagation(); e.preventDefault(); onDelete(card.id); }}
+          style={{ position: "absolute", top: 5, right: 5, width: 16, height: 16, borderRadius: "50%", border: "none", background: "var(--border-focus)", color: "var(--text-muted)", fontSize: 10, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, lineHeight: 1, transition: "all .15s" }}
+          onMouseOver={e => { e.currentTarget.style.background = "#f87171"; e.currentTarget.style.color = "white"; }}
+          onMouseOut={e => { e.currentTarget.style.background = "var(--border-focus)"; e.currentTarget.style.color = "var(--text-muted)"; }}
+          title="Delete card">×</button>
+      )}
+      {editing ? (
+        <div style={{ position: "relative" }}>
+          <textarea ref={editorRef} value={text} onChange={e => setText(e.target.value)} onBlur={handleBlur} onKeyDown={e => { if (e.key === "Escape") { setEditing(false); onEdit(card.id, text); } }} style={{ width: "100%", minHeight: 60, border: "none", background: "transparent", fontFamily: "inherit", fontSize: 13, color: "var(--text)", resize: "none", outline: "none", lineHeight: 1.5 }} />
+          <button onMouseDown={e => { e.preventDefault(); setShowEmoji(s => !s); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, padding: "2px 4px", opacity: 0.6 }}>😊</button>
+          {showEmoji && <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 400 }}><EmojiPopup onSelect={insertEmoji} onClose={() => setShowEmoji(false)} /></div>}
+        </div>
+      ) : (
+        <div style={{ fontSize: 13, color: "var(--text)", lineHeight: 1.5, fontWeight: 400, minHeight: 24, wordBreak: "break-word", paddingRight: 14 }}>{text || <span style={{ opacity: 0.35, fontStyle: "italic" }}>Double-click to edit…</span>}</div>
+      )}
+      <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6, fontWeight: 500, display: "flex", justifyContent: "space-between" }}>
+        <span>— {card.author}</span>{!editing && <span style={{ opacity: 0.4, fontSize: 10 }}>✎ dbl-click</span>}
+      </div>
+    </div>
   );
+}
 
-  const dropReaction = (emoji) => {
+// Revealed banner with fade-out
+function RevealedBanner() {
+  const [visible, setVisible] = useState(true);
+  const [fading, setFading] = useState(false);
+  useEffect(() => {
+    const fadeTimer = setTimeout(() => setFading(true), 2500);
+    const hideTimer = setTimeout(() => setVisible(false), 3000);
+    return () => { clearTimeout(fadeTimer); clearTimeout(hideTimer); };
+  }, []);
+  if (!visible) return null;
+  return <div className={`revealed-banner ${fading ? "fade-out" : ""}`}>✓ Revealed</div>;
+}
+
+function BoardView({ session, members, questions, currentUser, onNewSubmissions }) {
+  const sessionId = session?.id;
+  const isFacilitator = facilitatorStore.is();
+  const allowReactions = session?.allowReactions ?? false;
+  const allowVoting = session?.allowVoting ?? false;
+
+  const [cards, setCards] = useState([]);
+  const [submittedNames, setSubmittedNames] = useState([]);
+  const [freeCards, setFreeCards] = useState([]);
+  const [votes, setVotes] = useState({});
+  const [actionItemsLoaded, setActionItemsLoaded] = useState(false);
+  const [hasNewSubmissions, setHasNewSubmissions] = useState(false);
+  const [livePresence, setLivePresence] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const subscribedRef = useRef(false);
+
+  // Helper: map a submission row to card objects
+  // Uses stable IDs based on submission id + qId so React doesn't re-create on every real-time update
+  const subToCards = (sub) => {
+    const colorIndex = sub.id ? sub.id.charCodeAt(0) % CARD_COLORS.length : Math.floor(Math.random() * CARD_COLORS.length);
+    return Object.entries(sub.answers || {}).filter(([, val]) => val).map(([qId, content]) => ({
+      id: `${sub.id}_${qId}`, // stable ID
+      qId, content, author: sub.name,
+      color: CARD_COLORS[colorIndex],
+      groupId: null, type: qId === "q1" ? "emoji" : "text"
+    }));
+  };
+  const subToCardsRef = useRef(subToCards);
+  subToCardsRef.current = subToCards; // always up to date inside closures
+
+  // Load all data + set up real-time subscriptions
+  useEffect(() => {
+    if (!sessionId) return;
+    if (subscribedRef.current === sessionId) return; // prevent duplicate subscriptions for same session
+    subscribedRef.current = sessionId;
+    if (!supabase) {
+      // localStorage fallback
+      try {
+        const keys = Object.keys(localStorage).filter(k => k.startsWith("rk_sub_"));
+        const subs = keys.map(k => JSON.parse(localStorage.getItem(k))).filter(s => s?.sessionId === sessionId);
+        if (subs.length) { setCards(subs.flatMap(subToCards)); setSubmittedNames([...new Set(subs.map(s => s.name).filter(Boolean))]); }
+      } catch(e) { console.warn(e); }
+      setActionItemsLoaded(true);
+      setLoading(false);
+      return;
+    }
+
+    // Load initial data
+    Promise.all([
+      supabase.from("submissions").select("*").eq("session_id", sessionId),
+      supabase.from("free_cards").select("*").eq("session_id", sessionId),
+      supabase.from("votes").select("*").eq("session_id", sessionId),
+      supabase.from("action_items").select("*").eq("session_id", sessionId).order("created_at"),
+      supabase.from("session_state").select("*").eq("session_id", sessionId).single(),
+    ]).then(([subs, fcs, vts, acts, state]) => {
+      if (subs.data?.length) {
+        setCards(subs.data.flatMap(s => subToCardsRef.current(s)));
+        setSubmittedNames([...new Set(subs.data.map(s => s.name).filter(Boolean))]);
+      }
+      if (fcs.data) setFreeCards(fcs.data.map(r => ({ id: r.id, content: r.content, author: r.author, color: r.color, x: r.x, y: r.y })));
+      if (vts.data) {
+        const v = {};
+        vts.data.forEach(row => { if (!v[row.card_id]) v[row.card_id] = {}; v[row.card_id][row.user_name] = row.direction; });
+        setVotes(v);
+      }
+      if (acts.data?.length) setActionItems(acts.data.map(r => ({ id: r.id, text: r.text, owner: r.owner, done: r.done })));
+      setActionItemsLoaded(true);
+      if (state.data?.revealed) { setRevealed(true); setRevealKey(k => k + 1); }
+      setLoading(false);
+    });
+
+    // Postgres changes channel
+    const dbChannel = supabase.channel(`db-${sessionId}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "submissions", filter: `session_id=eq.${sessionId}` }, payload => {
+        const s = payload.new;
+        setCards(prev => [...prev.filter(c => c.author !== s.name), ...subToCardsRef.current(s)]);
+        setSubmittedNames(prev => [...new Set([...prev, s.name])]);
+        setHasNewSubmissions(true); onNewSubmissions?.();
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "submissions", filter: `session_id=eq.${sessionId}` }, payload => {
+        const s = payload.new;
+        setCards(prev => [...prev.filter(c => c.author !== s.name), ...subToCardsRef.current(s)]);
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "session_state", filter: `session_id=eq.${sessionId}` }, payload => {
+        const isRevealed = payload.new.revealed;
+        setRevealed(isRevealed);
+        if (isRevealed) setRevealKey(k => k + 1);
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "session_state", filter: `session_id=eq.${sessionId}` }, payload => {
+        // Handles first reveal (upsert creates INSERT when row doesn't exist yet)
+        const isRevealed = payload.new.revealed;
+        setRevealed(isRevealed);
+        if (isRevealed) setRevealKey(k => k + 1);
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "action_items", filter: `session_id=eq.${sessionId}` }, payload => {
+        const r = payload.new;
+        setActionItems(prev => {
+          if (prev.find(i => i.id === r.id)) return prev; // already have it
+          return [...prev, { id: r.id, text: r.text, owner: r.owner, done: r.done }];
+        });
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "action_items", filter: `session_id=eq.${sessionId}` }, payload => {
+        const r = payload.new;
+        setActionItems(prev => prev.map(i => i.id === r.id ? { ...i, text: r.text, owner: r.owner, done: r.done } : i));
+      })
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "action_items", filter: `session_id=eq.${sessionId}` }, payload => {
+        setActionItems(prev => prev.filter(i => i.id !== payload.old.id));
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "votes", filter: `session_id=eq.${sessionId}` }, payload => {
+        const r = payload.new;
+        setVotes(prev => { const next = { ...prev }; if (!next[r.card_id]) next[r.card_id] = {}; next[r.card_id][r.user_name] = r.direction; return next; });
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "votes", filter: `session_id=eq.${sessionId}` }, payload => {
+        const r = payload.new;
+        setVotes(prev => { const next = { ...prev }; if (!next[r.card_id]) next[r.card_id] = {}; next[r.card_id][r.user_name] = r.direction; return next; });
+      })
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "votes", filter: `session_id=eq.${sessionId}` }, payload => {
+        const r = payload.old;
+        setVotes(prev => { const next = { ...prev }; if (next[r.card_id]) delete next[r.card_id][r.user_name]; return next; });
+      })
+      .subscribe();
+
+    // Presence channel — who's on the board right now
+    const presenceChannel = supabase.channel(`presence-${sessionId}`, { config: { presence: { key: currentUser } } })
+      .on("presence", { event: "sync" }, () => {
+        const state = presenceChannel.presenceState();
+        const names = Object.values(state).flat().map(p => p.name).filter(Boolean);
+        setLivePresence([...new Set(names)]);
+      })
+      .subscribe(async status => {
+        if (status === "SUBSCRIBED") {
+          await presenceChannel.track({ name: currentUser, joinedAt: new Date().toISOString() });
+        }
+      });
+
+      // Free cards real-time
+      const freeCardsChannel = supabase.channel(`free-cards-${sessionId}`)
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "free_cards", filter: `session_id=eq.${sessionId}` }, payload => {
+          const r = payload.new;
+          setFreeCards(prev => {
+            if (prev.find(c => c.id === r.id)) return prev;
+            return [...prev, { id: r.id, content: r.content, author: r.author, color: r.color, x: r.x, y: r.y }];
+          });
+        })
+        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "free_cards", filter: `session_id=eq.${sessionId}` }, payload => {
+          const r = payload.new;
+          setFreeCards(prev => prev.map(c => c.id === r.id ? { ...c, content: r.content, x: r.x, y: r.y } : c));
+        })
+        .on("postgres_changes", { event: "DELETE", schema: "public", table: "free_cards", filter: `session_id=eq.${sessionId}` }, payload => {
+          setFreeCards(prev => prev.filter(c => c.id !== payload.old.id));
+        })
+        .subscribe();
+
+    // Broadcast channel for ephemeral reactions — same channel for send + receive
+    const reactionChannel = supabase.channel(`reactions-${sessionId}`)
+      .on("broadcast", { event: "reaction" }, ({ payload }) => {
+        const id = uid();
+        const x = 100 + Math.random() * (window.innerWidth - 200);
+        const y = 100 + Math.random() * (window.innerHeight - 200);
+        setReactions(r => [...r, { id, emoji: payload.emoji, x, y }]);
+        setTimeout(() => setReactions(r => r.filter(rx => rx.id !== id)), 2400);
+      })
+      .subscribe();
+    reactionChannelRef.current = reactionChannel;
+
+    return () => {
+      subscribedRef.current = null; // reset so re-mount works
+      supabase.removeChannel(dbChannel);
+      supabase.removeChannel(freeCardsChannel);
+      presenceChannel.untrack().then(() => supabase.removeChannel(presenceChannel));
+      supabase.removeChannel(reactionChannel);
+      reactionChannelRef.current = null;
+    };
+  }, [sessionId, currentUser]);
+
+  const reactionChannelRef = useRef(null);
+
+  const cardsWithVotes = cards.map(c => ({ ...c, votes: votes[c.id] || {} }));
+
+  // Votes handler — write to Supabase
+  const handleVote = async (cardId, dir) => {
+    const voteId = `${sessionId}_${cardId}_${currentUser}`;
+    if (dir === 0) {
+      setVotes(prev => { const next = { ...prev }; if (next[cardId]) { delete next[cardId][currentUser]; } return next; });
+      if (supabase) await supabase.from("votes").delete().eq("id", voteId);
+    } else {
+      setVotes(prev => { const next = { ...prev }; if (!next[cardId]) next[cardId] = {}; next[cardId][currentUser] = dir; return next; });
+      if (supabase) await supabase.from("votes").upsert({ id: voteId, session_id: sessionId, card_id: cardId, user_name: currentUser, direction: dir });
+    }
+  };
+
+  const handleRefresh = () => { setHasNewSubmissions(false); };
+
+  const [revealed, setRevealed] = useState(false);
+  const [revealKey, setRevealKey] = useState(0); // bump to re-mount RevealedBanner
+  const [groups, setGroups] = useState({});
+  const [actionItems, setActionItems] = useState([]);
+  const [newAction, setNewAction] = useState(""); const [newOwner, setNewOwner] = useState("");
+  const [showAI, setShowAI] = useState(null); const [groupingCard, setGroupingCard] = useState(null); const [newGroupName, setNewGroupName] = useState("");
+  const [appliedSuggestions, setAppliedSuggestions] = useState([]);
+  const [reactions, setReactions] = useState([]);
+  const canvasRef = useRef(null); const dragState = useRef(null);
+
+  const saveDebounceRef = useRef({});
+  const saveFreeCard = (card) => {
+    // Debounce — only write to Supabase 500ms after last update for this card
+    if (saveDebounceRef.current[card.id]) clearTimeout(saveDebounceRef.current[card.id]);
+    saveDebounceRef.current[card.id] = setTimeout(async () => {
+      delete saveDebounceRef.current[card.id];
+      if (supabase) {
+        const { error } = await supabase.from("free_cards").upsert({ id: card.id, session_id: sessionId, content: card.content, author: card.author, color: card.color, x: card.x, y: card.y });
+        if (error) console.warn("save free_card:", error.message);
+      }
+    }, 500);
+  };
+  const deleteFreeCardRemote = async (cardId) => {
+    if (supabase) await supabase.from("free_cards").delete().eq("id", cardId);
+  };
+
+  const addFreeCard = () => {
+    const canvas = canvasRef.current;
+    const rect = canvas ? canvas.getBoundingClientRect() : { width: 800, height: 600 };
+    const x = Math.max(0, Math.round(rect.width / 2 - 100));
+    const y = Math.max(0, Math.round(window.scrollY + window.innerHeight / 2 - 100));
+    const newCard = { id: uid(), content: "", author: currentUser || "You", color: randomColor(), x, y };
+    setFreeCards(prev => [...prev, newCard]);
+    saveFreeCard(newCard);
+  };
+  // Use refs for drag handlers to avoid stale closure issues
+  const dragHandlers = useRef({});
+  dragHandlers.current.move = (e) => {
+    const d = dragState.current; if (!d) return;
+    const dx = e.clientX - d.startX, dy = e.clientY - d.startY;
+    setFreeCards(cs => cs.map(c => c.id === d.cardId ? { ...c, x: Math.max(0, d.origX + dx), y: Math.max(0, d.origY + dy) } : c));
+  };
+  dragHandlers.current.end = () => {
+    if (!dragState.current) return;
+    const d = dragState.current;
+    setFreeCards(cs => { const card = cs.find(c => c.id === d.cardId); if (card) saveFreeCard(card); return cs; });
+    dragState.current = null;
+    window.removeEventListener("mousemove", dragHandlers.current.move);
+    window.removeEventListener("mouseup", dragHandlers.current.end);
+  };
+  const handleDragMove = (e) => dragHandlers.current.move(e);
+  const handleDragEnd = () => dragHandlers.current.end();
+  const handleDragStart = (e, cardId) => {
+    const card = freeCards.find(c => c.id === cardId); if (!card) return;
+    dragState.current = { cardId, startX: e.clientX, startY: e.clientY, origX: card.x, origY: card.y };
+    window.addEventListener("mousemove", dragHandlers.current.move);
+    window.addEventListener("mouseup", dragHandlers.current.end);
+  };
+  const handleEditCard = (cardId, newText) => {
+    setFreeCards(cs => {
+      const updated = cs.map(c => c.id === cardId ? { ...c, content: newText } : c);
+      const card = updated.find(c => c.id === cardId);
+      if (card) saveFreeCard(card);
+      return updated;
+    });
+  };
+  const handleDeleteCard = (cardId) => {
+    setFreeCards(cs => cs.filter(c => c.id !== cardId));
+    deleteFreeCardRemote(cardId);
+  };
+  useEffect(() => () => { window.removeEventListener("mousemove", handleDragMove); window.removeEventListener("mouseup", handleDragEnd); }, []);
+
+  const dropReaction = async emoji => {
+    // Show locally immediately
     const id = uid();
     const x = 100 + Math.random() * (window.innerWidth - 200);
     const y = 100 + Math.random() * (window.innerHeight - 200);
     setReactions(r => [...r, { id, emoji, x, y }]);
     setTimeout(() => setReactions(r => r.filter(rx => rx.id !== id)), 2400);
+    // Broadcast to others
+    if (supabase && reactionChannelRef.current) {
+      await reactionChannelRef.current.send({ type: "broadcast", event: "reaction", payload: { emoji } });
+    }
   };
 
-  const cardsForQ = (qId) => cards.filter(c => c.qId === qId);
-
-  const applyGroup = (cardId, groupId) => {
-    setCards(cs => cs.map(c => c.id === cardId ? { ...c, groupId } : c));
+  const cardsForQ = qId => cardsWithVotes.filter(c => c.qId === qId);
+  const applyGroup = (cardId, groupId) => setCards(cs => cs.map(c => c.id === cardId ? { ...c, groupId } : c));
+  const createGroup = (qId, name) => { const gid = uid(); setGroups(g => ({ ...g, [gid]: { name, qId } })); return gid; };
+  const groupsForQ = qId => Object.entries(groups).filter(([, v]) => v.qId === qId);
+  const toggleDone = async (id) => {
+    const item = actionItems.find(i => i.id === id);
+    if (!item) return;
+    const newDone = !item.done;
+    setActionItems(a => a.map(i => i.id === id ? { ...i, done: newDone } : i));
+    if (supabase) await supabase.from("action_items").update({ done: newDone }).eq("id", id);
   };
-
-  const createGroup = (qId, name) => {
-    const gid = uid();
-    setGroups(g => ({ ...g, [gid]: { name, qId } }));
-    return gid;
+  const deleteAction = async (id) => {
+    setActionItems(a => a.filter(i => i.id !== id));
+    if (supabase) await supabase.from("action_items").delete().eq("id", id);
   };
-
-  const toggleDone = (id) => setActionItems(a => a.map(i => i.id === id ? { ...i, done: !i.done } : i));
-  const deleteAction = (id) => setActionItems(a => a.filter(i => i.id !== id));
-  const addAction = () => {
+  const addAction = async () => {
     if (!newAction.trim()) return;
-    setActionItems(a => [...a, { id: uid(), text: newAction, owner: newOwner || "TBD", done: false }]);
+    const item = { id: uid(), text: newAction, owner: newOwner || "TBD", done: false };
+    setActionItems(a => [...a, item]);
     setNewAction(""); setNewOwner("");
+    if (supabase) {
+      const { error } = await supabase.from("action_items").insert({ ...item, session_id: sessionId });
+      if (error) console.warn("add action_item:", error.message);
+    }
+  };
+  const actionDebounceRef = useRef({});
+  const editActionText = (id, text) => {
+    setActionItems(a => a.map(i => i.id === id ? { ...i, text } : i));
+    if (supabase) {
+      clearTimeout(actionDebounceRef.current[`text_${id}`]);
+      actionDebounceRef.current[`text_${id}`] = setTimeout(() => {
+        supabase.from("action_items").update({ text }).eq("id", id);
+      }, 500);
+    }
+  };
+  const editActionOwner = (id, owner) => {
+    setActionItems(a => a.map(i => i.id === id ? { ...i, owner } : i));
+    if (supabase) {
+      clearTimeout(actionDebounceRef.current[`owner_${id}`]);
+      actionDebounceRef.current[`owner_${id}`] = setTimeout(() => {
+        supabase.from("action_items").update({ owner }).eq("id", id);
+      }, 500);
+    }
   };
 
-  const groupsForQ = (qId) => Object.entries(groups).filter(([, v]) => v.qId === qId);
+  const handleReveal = async () => {
+    setRevealed(true); setRevealKey(k => k + 1); // optimistic local update
+    if (supabase) {
+      const { error } = await supabase.from("session_state")
+        .upsert({ session_id: sessionId, revealed: true, updated_at: new Date().toISOString() },
+          { onConflict: "session_id" });
+      if (error) console.warn("reveal error:", error.message);
+    }
+  };
+  const handleHide = async () => {
+    setRevealed(false);
+    if (supabase) {
+      const { error } = await supabase.from("session_state")
+        .upsert({ session_id: sessionId, revealed: false, updated_at: new Date().toISOString() },
+          { onConflict: "session_id" });
+      if (error) console.warn("hide error:", error.message);
+    }
+  };
 
   return (
-    <div className="board-wrap" style={{ paddingTop: 0 }}>
-      {/* Presence strip */}
-      <div className="presence-strip">
-        <span style={{ marginRight: 4 }}>👥 In this session:</span>
-        {presence.map((p, i) => (
-          <div key={i} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <div className="presence-avatar" style={{ background: p.color }}>{p.name[0]}</div>
-            <span className="presence-name">{p.name}{p.vibe ? ` ${p.vibe}` : ""}</span>
-          </div>
-        ))}
+    <div className="board-wrap">
 
-      </div>
 
-      {/* Reaction bar */}
-      {revealed && (
+      {/* Reaction bar — only if enabled */}
+      {revealed && allowReactions && (
         <div className="reaction-bar">
           <span className="reaction-bar-label">React</span>
-          {REACTION_EMOJIS.map(e => (
-            <button key={e} className="reaction-emoji-btn" onClick={() => dropReaction(e)} title={`Drop ${e}`}>{e}</button>
-          ))}
+          {REACTION_EMOJIS.map(e => <button key={e} className="reaction-emoji-btn" onClick={() => dropReaction(e)}>{e}</button>)}
         </div>
       )}
+      {reactions.map(r => <div key={r.id} className="reaction-drop" style={{ left: r.x, top: r.y }}>{r.emoji}</div>)}
 
-      {/* Floating drops */}
-      {reactions.map(r => (
-        <div key={r.id} className="reaction-drop" style={{ left: r.x, top: r.y }}>{r.emoji}</div>
-      ))}
-
-      <div style={{ padding: "16px 24px 0" }}>
-      <div className="board-toolbar">
-        <div className="board-title">Sprint {sprintNumber} — Facilitation Board</div>
-        {!revealed
-          ? <button className="tool-btn primary" onClick={() => setRevealed(true)}>👁 Reveal All Cards</button>
-          : <span className="tag" style={{ background: "#6BCB77", color: "white" }}>✓ Cards Revealed</span>
-        }
-        <button className="tool-btn" onClick={() => setShowAI("q3")}>✨ AI Group Suggestions</button>
-      </div>
-
-      {!revealed && (
-        <div style={{ background: "rgba(255,200,0,.07)", borderRadius: 10, padding: "10px 16px", marginBottom: 16, fontSize: 14, color: "#d4a700", border: "1px solid rgba(255,200,0,.15)" }}>
-          🔒 Cards are hidden until you reveal them. Click <strong>Reveal All Cards</strong> to show responses to the team.
-        </div>
-      )}
-
-      <div style={{ display: "flex", gap: 20, alignItems: "flex-start", flexWrap: "wrap" }}>
-        <div className="board-columns">
-          {questions.map(q => {
-            const qCards = cardsForQ(q.id);
-            const ungrouped = qCards.filter(c => !c.groupId);
-            const qGroups = groupsForQ(q.id);
-
-            return (
-              <div key={q.id} className="col">
-                <div className="col-header" style={{ background: q.color }}>
-                  <div className="col-header-title">{q.prompt}</div>
-                  <div className="col-count">{qCards.length}</div>
+      <div style={{ padding: "16px 20px 24px" }}>
+        {/* Toolbar */}
+        <div className="board-toolbar">
+          <button className="btn btn-primary" onClick={addFreeCard} style={{ fontSize: 14, padding: "8px 18px" }}>＋ Add Card</button>
+          {isFacilitator && (
+            <>
+              {!revealed
+                ? <button className="btn btn-secondary" onClick={handleReveal}>👁 Reveal Cards</button>
+                : <button className="btn btn-success" onClick={handleHide}>🙈 Hide Cards</button>
+              }
+              <button className="btn btn-ghost" onClick={() => setShowAI("q3")}>✨ AI Suggestions</button>
+              <button className="btn btn-ghost" onClick={() => exportCSV({ session, questions, cards: cardsWithVotes, freeCards, actionItems })}>⬇ Export</button>
+            </>
+          )}
+          {isFacilitator && <span className="facilitator-badge">Facilitator</span>}
+          {/* Live presence + submitted chips */}
+          <div style={{ display: "flex", alignItems: "center", gap: 5, marginLeft: "auto", flexWrap: "wrap" }}>
+            {livePresence.length > 0 && <>
+              <span style={{ fontSize: 10, color: "#34d399", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginRight: 2 }}>On board</span>
+              {livePresence.map((name, i) => (
+                <div key={`live-${i}`} className="sub-chip" style={{ background: "rgba(16,185,129,.08)", border: "1px solid rgba(16,185,129,.25)" }}>
+                  <div className="sub-chip-dot" style={{ background: AVATAR_COLORS[i % AVATAR_COLORS.length], boxShadow: "0 0 0 2px #10b981" }}>{name[0]}</div>
+                  <span style={{ color: "#34d399" }}>{name}</span>
                 </div>
-                <div className="col-body">
-                  {revealed && <div className="revealed-banner">✓ Revealed</div>}
-
-                  {/* Groups */}
-                  {qGroups.map(([gid, gdata]) => {
-                    const gCards = qCards.filter(c => c.groupId === gid);
-                    return (
-                      <div key={gid} className="group-block">
-                        <div className="group-label">
-                          <input value={gdata.name} onChange={e => setGroups(g => ({ ...g, [gid]: { ...g[gid], name: e.target.value } }))} />
-                          <span style={{ fontSize: 11, color: "#999" }}>{gCards.length} cards</span>
-                        </div>
-                        {gCards.map(c => (
-                          <StickyCard key={c.id} card={c} hidden={!revealed} grouped groupName={gdata.name}
-                            onGroup={() => setGroupingCard(c)} />
-                        ))}
-                      </div>
-                    );
-                  })}
-
-                  {/* Ungrouped */}
-                  {ungrouped.map(c => (
-                    <StickyCard key={c.id} card={c} hidden={!revealed}
-                      onGroup={() => revealed && setGroupingCard(c)} />
-                  ))}
-
-                  {qCards.length === 0 && (
-                    <div style={{ textAlign: "center", color: "#bbb", fontSize: 13, padding: "20px 0" }}>No responses yet</div>
-                  )}
-                </div>
+              ))}
+              <span style={{ color: "var(--text-dim)", fontSize: 10, margin: "0 2px" }}>·</span>
+            </>}
+            {submittedNames.length > 0 && (
+              <span style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginRight: 2 }}>Submitted</span>
+            )}
+            {submittedNames.map((name, i) => (
+              <div key={`sub-${i}`} className="sub-chip">
+                <div className="sub-chip-dot" style={{ background: AVATAR_COLORS[i % AVATAR_COLORS.length] }}>{name[0]}</div>
+                {name}
               </div>
-            );
-          })}
-        </div>
-
-        {/* Action Items Panel */}
-        <div className="actions-panel" style={{ position: "sticky", top: 80 }}>
-          <div className="actions-title">✅ Action Items</div>
-          {actionItems.map(item => (
-            <div key={item.id} className="action-item">
-              <div className={`action-check ${item.done ? "done" : ""}`} onClick={() => toggleDone(item.id)}>
-                {item.done && "✓"}
-              </div>
-              <div className={`action-text ${item.done ? "done" : ""}`}>{item.text}</div>
-              <div className="action-owner">{item.owner}</div>
-              <div className="action-delete" onClick={() => deleteAction(item.id)}>×</div>
-            </div>
-          ))}
-          <div className="add-action">
-            <input placeholder="New action item..." value={newAction} onChange={e => setNewAction(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && addAction()} />
-            <input placeholder="Owner" value={newOwner} onChange={e => setNewOwner(e.target.value)}
-              style={{ width: 80, border: "2px solid #e8e8e8", borderRadius: 8, padding: "8px 10px", fontFamily: "DM Sans, sans-serif", fontSize: 14, outline: "none" }}
-              onKeyDown={e => e.key === "Enter" && addAction()} />
-            <button className="add-action-btn" onClick={addAction}>+</button>
+            ))}
+            {submittedNames.length === 0 && livePresence.length === 0 && <span style={{ fontSize: 11, color: "var(--text-dim)" }}>No submissions yet</span>}
           </div>
         </div>
-      </div>
 
-      {/* AI Suggestions Modal */}
-      {showAI && (
-        <div className="modal-overlay" onClick={() => setShowAI(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <h2>✨ AI Grouping Suggestions</h2>
-            <p>Based on the card content, here are suggested theme groupings for Q3:</p>
-            {(AI_SUGGESTIONS[showAI] || []).map((s, i) => (
-              <div key={i} className="ai-suggestion">
-                <div className="ai-suggestion-title">📁 {s.label}</div>
-                {s.cards.map((c, j) => (
-                  <div key={j} className="suggestion-item">
-                    <span>🟡</span>
-                    <span>Cards mentioning <em>{c}</em></span>
-                    <span className="suggestion-apply" onClick={() => {
-                      const gid = createGroup(showAI, s.label);
-                      cards.filter(card => card.qId === showAI && card.content.toLowerCase().includes(c.toLowerCase()))
-                        .forEach(card => applyGroup(card.id, gid));
-                      setShowAI(null);
-                    }}>Apply →</span>
+        {loading && (
+          <div style={{ display: "flex", gap: 16, marginBottom: 24 }}>
+            {[1,2,3,4].map(i => (
+              <div key={i} style={{ width: 300, flexShrink: 0 }}>
+                <div style={{ height: 48, background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "10px 10px 0 0", marginBottom: 0 }} />
+                <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderTop: "none", borderRadius: "0 0 10px 10px", padding: 10, display: "flex", flexDirection: "column", gap: 8, minHeight: 160 }}>
+                  {[1,2].map(j => (
+                    <div key={j} style={{ height: 72, background: "var(--bg-raised)", borderRadius: 8, animation: "shimmer 1.4s ease-in-out infinite", backgroundImage: "linear-gradient(90deg, var(--bg-raised) 0%, var(--bg-hover) 50%, var(--bg-raised) 100%)", backgroundSize: "200% 100%" }} />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {!loading && !revealed && isFacilitator && (
+          <div style={{ background: "rgba(245,158,11,.05)", border: "1px solid rgba(245,158,11,.15)", borderRadius: 8, padding: "9px 14px", marginBottom: 16, fontSize: 13, color: "#fbbf24" }}>
+            🔒 Cards are hidden. Click <strong>Reveal Cards</strong> to show responses.
+          </div>
+        )}
+        {freeCards.length > 0 && <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 12 }}>💡 <strong style={{ color: "var(--text-muted)" }}>{freeCards.length} free card{freeCards.length !== 1 ? "s" : ""}</strong> on canvas — drag, double-click to edit</div>}
+
+        <div style={{ paddingBottom: 40 }}>
+          <div style={{ display: "flex", gap: 16, alignItems: "flex-start", position: "relative", flexWrap: "nowrap" }}>
+            {/* Free cards canvas */}
+            <div ref={canvasRef} style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 20 }}>
+              {freeCards.map(card => <div key={card.id} style={{ pointerEvents: "all" }}><FreeCard card={card} onDragStart={handleDragStart} onEdit={handleEditCard} onDelete={handleDeleteCard} /></div>)}
+            </div>
+
+            {/* Q columns */}
+            {questions.map(q => {
+              const qCards = cardsForQ(q.id);
+              const ungrouped = qCards.filter(c => !c.groupId);
+              const qGroups = groupsForQ(q.id);
+              return (
+                <div key={q.id} className="col">
+                  <div className="col-header" style={{ background: "var(--bg-card)", borderTop: `2px solid ${q.color}`, border: "1px solid var(--border)", borderBottom: "none", borderRadius: "10px 10px 0 0" }}>
+                    <div className="col-header-title">{q.prompt}</div>
+                  </div>
+                  <div className="col-body">
+                    {revealed && <RevealedBanner key={revealKey} />}
+                    {qGroups.map(([gid, gdata]) => {
+                      const gCards = qCards.filter(c => c.groupId === gid);
+                      return (
+                        <div key={gid} className="group-block">
+                          <div className="group-label"><input value={gdata.name} onChange={e => setGroups(g => ({ ...g, [gid]: { ...g[gid], name: e.target.value } }))} /><span style={{ fontSize: 10, color: "var(--text-dim)" }}>{gCards.length}</span></div>
+                          {gCards.map(c => <StickyCard key={c.id} card={c} hidden={!revealed} grouped groupName={gdata.name} onGroup={() => setGroupingCard(c)} revealed={revealed} currentUser={currentUser} onVote={handleVote} allowVoting={allowVoting} accentColor={q.color} />)}
+                        </div>
+                      );
+                    })}
+                    {ungrouped.map(c => <StickyCard key={c.id} card={c} hidden={!revealed} onGroup={() => revealed && setGroupingCard(c)} revealed={revealed} currentUser={currentUser} onVote={handleVote} allowVoting={allowVoting} accentColor={q.color} />)}
+                    {qCards.length === 0 && <div style={{ textAlign: "center", color: "var(--text-dim)", fontSize: 12, padding: "24px 0" }}>No responses yet</div>}
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Action Items column */}
+            <div style={{ width: 268, flexShrink: 0 }}>
+              <div style={{ background: "var(--bg-card)", borderTop: "2px solid var(--border-focus)", border: "1px solid var(--border)", borderBottom: "none", borderRadius: "10px 10px 0 0", padding: "12px 14px" }}>
+                <div className="col-header-title">✅ Action Items</div>
+              </div>
+              <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderTop: "none", borderRadius: "0 0 10px 10px", padding: 10, minHeight: 200, display: "flex", flexDirection: "column", gap: 6 }}>
+                {actionItems.map(item => (
+                  <div key={item.id} style={{ background: item.done ? "rgba(16,185,129,.05)" : "var(--bg-raised)", border: `1px solid ${item.done ? "rgba(16,185,129,.2)" : "var(--border-light)"}`, borderRadius: 7, padding: "9px 11px", display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                      <div className={`action-check ${item.done ? "done" : ""}`} onClick={() => toggleDone(item.id)} style={{ marginTop: 1 }}>{item.done && "✓"}</div>
+                      <input
+                        value={item.text}
+                        onChange={e => editActionText(item.id, e.target.value)}
+                        style={{ flex: 1, background: "transparent", border: "none", fontFamily: "inherit", fontSize: 13, color: item.done ? "var(--text-dim)" : "var(--text)", outline: "none", textDecoration: item.done ? "line-through" : "none", minWidth: 0 }}
+                      />
+                      <div style={{ color: "var(--text-dim)", cursor: "pointer", fontSize: 15, transition: "color .15s", flexShrink: 0 }} onClick={() => deleteAction(item.id)} onMouseOver={e => e.currentTarget.style.color = "#f87171"} onMouseOut={e => e.currentTarget.style.color = "var(--text-dim)"}>×</div>
+                    </div>
+                    <div style={{ paddingLeft: 26, display: "flex", alignItems: "center", gap: 6 }}>
+                      <input
+                        value={item.owner}
+                        onChange={e => editActionOwner(item.id, e.target.value)}
+                        style={{ background: "transparent", border: "none", fontFamily: "inherit", fontSize: 11, color: "var(--blue)", fontWeight: 500, outline: "none", width: 80 }}
+                        placeholder="Owner"
+                      />
+                    </div>
                   </div>
                 ))}
+                {actionItems.length === 0 && <div style={{ textAlign: "center", color: "var(--text-dim)", fontSize: 12, padding: "24px 0" }}>No actions yet</div>}
+                <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 5 }}>
+                  <input placeholder="New action item…" value={newAction} onChange={e => setNewAction(e.target.value)} onKeyDown={e => e.key === "Enter" && addAction()} style={{ width: "100%", background: "var(--bg-input)", border: "1px solid var(--border-light)", borderRadius: 7, padding: "6px 9px", fontFamily: "inherit", fontSize: 12, outline: "none", color: "var(--text)" }} />
+                  <div style={{ display: "flex", gap: 5 }}>
+                    <input placeholder="Owner" value={newOwner} onChange={e => setNewOwner(e.target.value)} onKeyDown={e => e.key === "Enter" && addAction()} style={{ flex: 1, background: "var(--bg-input)", border: "1px solid var(--border-light)", borderRadius: 7, padding: "6px 9px", fontFamily: "inherit", fontSize: 12, outline: "none", color: "var(--text)" }} />
+                    <button className="add-action-btn" onClick={addAction}>+</button>
+                  </div>
+                </div>
               </div>
-            ))}
-            <div className="modal-btns">
-              <button className="tool-btn" onClick={() => setShowAI(null)}>Close</button>
             </div>
           </div>
         </div>
-      )}
 
-      {/* Group Assignment Modal */}
-      {groupingCard && (
-        <div className="modal-overlay" onClick={() => setGroupingCard(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <h2>Group This Card</h2>
-            <div className="sticky" style={{ background: groupingCard.color, marginBottom: 20 }}>
-              <div className="sticky-content">{groupingCard.content}</div>
-            </div>
-            <p>Add to an existing group or create a new one:</p>
-            {groupsForQ(groupingCard.qId).map(([gid, gdata]) => (
-              <div key={gid} className="suggestion-item" style={{ border: "1px solid #eee", borderRadius: 8, marginBottom: 6 }}
-                onClick={() => { applyGroup(groupingCard.id, gid); setGroupingCard(null); }}>
-                📁 {gdata.name} <span className="suggestion-apply">Add here →</span>
+        {/* AI modal */}
+        {showAI && (
+          <div className="modal-overlay" onClick={() => setShowAI(null)}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              <h2>✨ AI Grouping Suggestions</h2><p>Apply as many groupings as you like, then close.</p>
+              {(AI_SUGGESTIONS[showAI] || []).map((s, i) => {
+                const applied = appliedSuggestions.includes(s.label);
+                return (
+                  <div key={i} className="ai-suggestion" style={{ opacity: applied ? 0.6 : 1 }}>
+                    <div className="ai-suggestion-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      {applied ? "✓" : "📁"} {s.label}
+                      {applied && <span style={{ fontSize: 10, color: "var(--green)", fontWeight: 600 }}>Applied</span>}
+                    </div>
+                    {s.cards.map((c, j) => (
+                      <div key={j} className="suggestion-item" onClick={() => {
+                        if (applied) return;
+                        const gid = createGroup(showAI, s.label);
+                        cards.filter(card => card.qId === showAI && typeof card.content === "string" && card.content.toLowerCase().includes(c.toLowerCase())).forEach(card => applyGroup(card.id, gid));
+                        setAppliedSuggestions(a => [...a, s.label]);
+                      }}>
+                        <span>·</span><span>Cards mentioning <em>{c}</em></span>
+                        {!applied && <span className="suggestion-apply">Apply →</span>}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+              <div className="modal-btns">
+                <button className="btn btn-secondary" onClick={() => { setShowAI(null); setAppliedSuggestions([]); }}>Done</button>
               </div>
-            ))}
-            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-              <input className="text-input" style={{ minHeight: "unset", height: 40 }} placeholder="New group name..."
-                value={newGroupName} onChange={e => setNewGroupName(e.target.value)} />
-              <button className="tool-btn primary" onClick={() => {
-                if (!newGroupName.trim()) return;
-                const gid = createGroup(groupingCard.qId, newGroupName);
-                applyGroup(groupingCard.id, gid);
-                setNewGroupName(""); setGroupingCard(null);
-              }}>Create</button>
-            </div>
-            <div className="modal-btns">
-              {groupingCard.groupId && (
-                <button className="tool-btn danger" onClick={() => { applyGroup(groupingCard.id, null); setGroupingCard(null); }}>Remove from group</button>
-              )}
-              <button className="tool-btn" onClick={() => setGroupingCard(null)}>Cancel</button>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+
+        {/* Group modal */}
+        {groupingCard && (
+          <div className="modal-overlay" onClick={() => setGroupingCard(null)}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              <h2>Group This Card</h2>
+              <div className="sticky" style={{ borderLeftColor: "var(--blue)", marginBottom: 18 }}><div className="sticky-content">{groupingCard.content}</div></div>
+              <p>Add to a group or create a new one:</p>
+              {groupsForQ(groupingCard.qId).map(([gid, gdata]) => (<div key={gid} className="suggestion-item" style={{ border: "1px solid var(--border)", borderRadius: 7, marginBottom: 5 }} onClick={() => { applyGroup(groupingCard.id, gid); setGroupingCard(null); }}>📁 {gdata.name} <span className="suggestion-apply">Add here →</span></div>))}
+              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                <input className="input" style={{ height: 38 }} placeholder="New group name…" value={newGroupName} onChange={e => setNewGroupName(e.target.value)} />
+                <button className="btn btn-primary" onClick={() => { if (!newGroupName.trim()) return; const gid = createGroup(groupingCard.qId, newGroupName); applyGroup(groupingCard.id, gid); setNewGroupName(""); setGroupingCard(null); }}>Create</button>
+              </div>
+              <div className="modal-btns">{groupingCard.groupId && <button className="btn btn-danger" onClick={() => { applyGroup(groupingCard.id, null); setGroupingCard(null); }}>Remove from group</button>}<button className="btn btn-secondary" onClick={() => setGroupingCard(null)}>Cancel</button></div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
 // ── History View ──────────────────────────────────────────────────────────────
 
-const PAST_SPRINTS = [
-  { num: 12, date: "Feb 12, 2026", cards: 14, actions: 3, completed: 2 },
-  { num: 11, date: "Jan 29, 2026", cards: 11, actions: 4, completed: 4 },
-  { num: 10, date: "Jan 15, 2026", cards: 16, actions: 2, completed: 1 },
-  { num: 9,  date: "Jan 1, 2026",  cards: 9,  actions: 3, completed: 3 },
-];
 
-function HistoryView({ onLoadSprint }) {
-  return (
-    <div className="history-wrap">
-      <div className="history-title">📚 Past Retros</div>
-      {PAST_SPRINTS.map(s => (
-        <div key={s.num} className="history-card" onClick={() => onLoadSprint(s.num)}>
-          <div className="history-sprint">Sprint {s.num}</div>
-          <div className="history-meta">{s.date}</div>
-          <div className="history-stats">
-            <span className="stat-pill">🃏 {s.cards} cards</span>
-            <span className="stat-pill">✅ {s.actions} action items</span>
-            <span className="stat-pill" style={{ background: s.completed === s.actions ? "#e8f5e9" : "#fff3e0" }}>
-              {s.completed === s.actions ? "🟢" : "🟡"} {s.completed}/{s.actions} completed
-            </span>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 // ── Settings Modal ────────────────────────────────────────────────────────────
 
 const SETTINGS_PASSWORD = "retro2026";
 
-const DEFAULT_SETTINGS = {
-  sprintNumber: 13,
-  cutoffDate: "",
-  cutoffTime: "09:55",
-  q3Variant: 0,
-  members: ["Alex", "Sam", "Jordan", "Riley", "Casey", "Morgan"],
-};
-
-function loadSettings() {
-  try {
-    const s = localStorage.getItem("retrokit-settings");
-    return s ? { ...DEFAULT_SETTINGS, ...JSON.parse(s) } : { ...DEFAULT_SETTINGS };
-  } catch { return { ...DEFAULT_SETTINGS }; }
-}
-
-function saveSettings(s) {
-  try { localStorage.setItem("retrokit-settings", JSON.stringify(s)); } catch {}
-}
-
-function SettingsModal({ settings, onSave, onClose }) {
-  const [locked, setLocked] = useState(true);
-  const [pw, setPw] = useState("");
-  const [pwError, setPwError] = useState(false);
-  const [form, setForm] = useState({ ...settings });
+function SettingsModal({ currentSession, onSave, onClose, onReset }) {
+  // Stay unlocked for the whole browser session once password entered
+  const [locked, setLocked] = useState(() => !facilitatorStore.is());
+  const [pw, setPw] = useState(""); const [pwError, setPwError] = useState(false);
+  const [sessions, setSessions] = useState(() => sessionStore.list());
+  // "list" = sessions overview, "edit" = create/edit form
+  const [panel, setPanel] = useState("list");
+  const [editingSession, setEditingSession] = useState(null); // null = new
+  const [form, setForm] = useState({ name: "", sprintNumber: 1, date: "", cutoffDate: "", cutoffTime: "", q3Variant: 0, allowReactions: false, allowVoting: false });
   const [saved, setSaved] = useState(false);
+  const [copiedId, setCopiedId] = useState(null);
 
   const unlock = () => {
-    if (pw === SETTINGS_PASSWORD) { setLocked(false); setPwError(false); }
-    else { setPwError(true); }
+    if (pw === SETTINGS_PASSWORD) {
+      setLocked(false); setPwError(false);
+      facilitatorStore.set();
+      if (sessions.length === 0) setPanel("edit"); // go straight to create form if no sessions
+    } else setPwError(true);
+  };
+
+  const openNew = () => {
+    setEditingSession(null);
+    setForm({ name: "", sprintNumber: 1, date: "", cutoffDate: "", cutoffTime: "", q3Variant: 0, allowReactions: false, allowVoting: false });
+    setSaved(false);
+    setPanel("edit");
+  };
+
+  const openEdit = (s, e) => {
+    e.stopPropagation();
+    setEditingSession(s);
+    setForm({ name: s.name, sprintNumber: s.sprintNumber, date: s.date || "", cutoffDate: s.cutoffDate || "", cutoffTime: s.cutoffTime || "", q3Variant: s.q3Variant ?? 0, allowReactions: s.allowReactions ?? false, allowVoting: s.allowVoting ?? false });
+    setSaved(false);
+    setPanel("edit");
   };
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
 
-  const handleSave = () => {
-    onSave(form);
+  const handleSave = async () => {
+    const isNew = !editingSession;
+    const id = editingSession?.id || uid();
+    const session = { id, name: form.name || "Untitled Session", sprintNumber: parseInt(form.sprintNumber) || 1, date: form.date, cutoffDate: form.cutoffDate, cutoffTime: form.cutoffTime, q3Variant: parseInt(form.q3Variant) || 0, allowReactions: form.allowReactions, allowVoting: form.allowVoting };
+    if (isNew) {
+      wipeSessionData(id);
+      // Also delete from Supabase if re-creating
+      if (supabase) await supabase.from("sessions").delete().eq("id", id);
+    }
+    sessionStore.save(session);
+    setSessions(sessionStore.list());
     setSaved(true);
-    setTimeout(() => { setSaved(false); onClose(); }, 1000);
+    onSave(session);
+    setTimeout(() => { setSaved(false); setPanel("list"); }, 900);
   };
 
-  const updateMember = (i, val) => {
-    const m = [...form.members];
-    m[i] = val;
-    set("members", m);
+  const handleDelete = (id, e) => {
+    e.stopPropagation();
+    if (!window.confirm("Delete this session and all its data?")) return;
+    wipeSessionData(id); sessionStore.delete(id);
+    setSessions(sessionStore.list());
+    if (editingSession?.id === id) setPanel("list");
   };
 
-  const addMember = () => set("members", [...form.members, ""]);
-  const removeMember = (i) => set("members", form.members.filter((_, j) => j !== i));
+  const copyLink = (s, e) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(sessionStore.getSessionUrl(s.id)).catch(() => {});
+    setCopiedId(s.id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const canClose = sessions.length > 0; // can't close with zero sessions
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal settings-modal" onClick={e => e.stopPropagation()}>
+    <div className="modal-overlay" onClick={canClose ? onClose : undefined}>
+      <div className="modal" style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()}>
+
+        {/* ── Lock screen ── */}
         {locked ? (
           <div className="settings-lock">
             <div className="settings-lock-icon">⚙️</div>
             <h2>Settings</h2>
-            <p>Enter the facilitator password to make changes.</p>
+            <p>Enter the facilitator password to continue.</p>
             <div className="settings-pw-row">
-              <input
-                className="settings-pw-input"
-                type="password"
-                placeholder="Password"
-                value={pw}
+              <input className="settings-pw-input" type="password" placeholder="Password" value={pw}
                 onChange={e => { setPw(e.target.value); setPwError(false); }}
-                onKeyDown={e => e.key === "Enter" && unlock()}
-                autoFocus
-              />
-              <button className="tool-btn primary" onClick={unlock}>Unlock</button>
+                onKeyDown={e => e.key === "Enter" && unlock()} autoFocus />
+              <button className="btn btn-primary" onClick={unlock}>Unlock</button>
             </div>
             {pwError && <div className="settings-pw-error">Incorrect password</div>}
-            <div className="modal-btns" style={{ justifyContent: "center", marginTop: 16 }}>
-              <button className="tool-btn" onClick={onClose}>Cancel</button>
-            </div>
+            {canClose && <div className="modal-btns" style={{ justifyContent: "center", marginTop: 14 }}><button className="btn btn-secondary" onClick={onClose}>Cancel</button></div>}
           </div>
+
+        /* ── Sessions list ── */
+        ) : panel === "list" ? (
+          <>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+              <h2 style={{ marginBottom: 0 }}>Sessions</h2>
+              <button className="btn btn-primary" onClick={openNew}>＋ New Session</button>
+            </div>
+
+            {sessions.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "32px 0 24px" }}>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>📋</div>
+                <div style={{ fontWeight: 600, color: "var(--text)", fontSize: 16, marginBottom: 6 }}>No sessions yet</div>
+                <div style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 24 }}>Create your first retro session to get started.</div>
+                <button className="btn btn-primary" onClick={openNew} style={{ padding: "10px 24px", fontSize: 14 }}>Create your first session →</button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+                {sessions.map(s => {
+                  const open = sessionStore.isSubmissionOpen(s);
+                  const cutoff = sessionStore.getCutoff(s);
+                  const url = sessionStore.getSessionUrl(s.id);
+                  return (
+                    <div key={s.id} style={{ background: "var(--bg-raised)", border: `1px solid ${currentSession?.id === s.id ? "var(--red)" : "var(--border-light)"}`, borderRadius: 10, padding: "14px 16px" }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: 14, color: "var(--text)", marginBottom: 3 }}>{s.name}</div>
+                          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                            Sprint {s.sprintNumber}{s.date ? ` · ${s.date}` : ""}
+                            {cutoff ? ` · closes ${cutoff.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
+                          </div>
+                          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                            <span style={{ fontSize: 11, fontWeight: 600, color: open ? "#34d399" : "var(--text-dim)", background: open ? "rgba(52,211,153,.1)" : "var(--bg-input)", border: `1px solid ${open ? "rgba(52,211,153,.25)" : "var(--border)"}`, borderRadius: 20, padding: "1px 8px" }}>{open ? "🟢 Open" : "🔴 Closed"}</span>
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                          <button className="btn btn-secondary" style={{ padding: "5px 10px", fontSize: 12 }}
+                            onClick={e => copyLink(s, e)}>
+                            {copiedId === s.id ? "✓ Copied" : "Copy link"}
+                          </button>
+                          <button className="btn btn-secondary" style={{ padding: "5px 10px", fontSize: 12 }}
+                            onClick={e => openEdit(s, e)} title="Edit session">✎</button>
+                          <button className="btn btn-danger" style={{ padding: "5px 10px", fontSize: 12 }}
+                            onClick={e => handleDelete(s.id, e)} title="Delete session">🗑</button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <button className="btn btn-danger" style={{ fontSize: 11 }} onClick={() => {
+                if (!window.confirm("Delete ALL sessions, submissions, and board data?")) return;
+                wipeAllData(); setSessions([]); onReset();
+              }}>⚠ Reset all data</button>
+              {canClose && <button className="btn btn-secondary" onClick={onClose}>Close</button>}
+            </div>
+          </>
+
+        /* ── Edit / Create form ── */
         ) : (
           <>
-            <h2>⚙️ Settings</h2>
-            <p>Changes apply immediately after saving.</p>
-
-            <div className="settings-section">
-              <div className="settings-section-title">Sprint</div>
-              <div className="settings-row">
-                <label className="settings-label">Sprint number</label>
-                <input className="settings-input" type="number" min="1"
-                  value={form.sprintNumber}
-                  onChange={e => set("sprintNumber", parseInt(e.target.value) || 1)} />
-              </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+              <button className="btn btn-ghost" style={{ padding: "4px 8px", fontSize: 16 }} onClick={() => setPanel("list")}>←</button>
+              <h2 style={{ marginBottom: 0 }}>{editingSession ? "Edit Session" : "New Session"}</h2>
             </div>
 
             <div className="settings-section">
-              <div className="settings-section-title">Submission cutoff</div>
+              <div className="settings-row"><label className="label">Session name</label><input className="input" placeholder="e.g. Flex1 Sprint 16, MetaCon Retro" value={form.name} onChange={e => set("name", e.target.value)} autoFocus /></div>
               <div style={{ display: "flex", gap: 10 }}>
-                <div className="settings-row" style={{ flex: 2 }}>
-                  <label className="settings-label">Date</label>
-                  <input className="settings-input" type="date"
-                    value={form.cutoffDate}
-                    onChange={e => set("cutoffDate", e.target.value)} />
-                </div>
-                <div className="settings-row" style={{ flex: 1 }}>
-                  <label className="settings-label">Time</label>
-                  <input className="settings-input" type="time"
-                    value={form.cutoffTime}
-                    onChange={e => set("cutoffTime", e.target.value)} />
-                </div>
+                <div className="settings-row" style={{ flex: 1 }}><label className="label">Sprint #</label><input className="input" type="number" min="1" value={form.sprintNumber} onChange={e => set("sprintNumber", e.target.value)} /></div>
+                <div className="settings-row" style={{ flex: 2 }}><label className="label">Retro date</label><input className="input" type="date" value={form.date} onChange={e => set("date", e.target.value)} /></div>
               </div>
-              <div className="settings-hint">Set to ~5 minutes before your retro starts.</div>
             </div>
 
             <div className="settings-section">
-              <div className="settings-section-title">Rotating question (Q3)</div>
-              <div className="settings-row">
-                <label className="settings-label">Active variant</label>
-                <select className="settings-select"
-                  value={form.q3Variant}
-                  onChange={e => set("q3Variant", parseInt(e.target.value))}>
-                  {Q3_VARIANTS.map((q, i) => (
-                    <option key={i} value={i}>{q}</option>
-                  ))}
-                </select>
+              <div className="settings-section-title">Submission Cutoff</div>
+              <div className="settings-hint" style={{ marginBottom: 10 }}>Countdown timer counts down to this. Set a few minutes before the retro starts.</div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <div className="settings-row" style={{ flex: 2 }}><label className="label">Date</label><input className="input" type="date" value={form.cutoffDate} onChange={e => set("cutoffDate", e.target.value)} /></div>
+                <div className="settings-row" style={{ flex: 1 }}><label className="label">Time</label><input className="input" type="time" value={form.cutoffTime} onChange={e => set("cutoffTime", e.target.value)} /></div>
               </div>
+              <div className="settings-row"><label className="label">Q3 variant</label><select className="select" value={form.q3Variant} onChange={e => set("q3Variant", e.target.value)}>{Q3_VARIANTS.map((q, i) => <option key={i} value={i}>{q}</option>)}</select></div>
             </div>
 
+            <div className="settings-section">
+              <div className="settings-section-title">Board Features</div>
+              <div className="toggle-row">
+                <div><div className="toggle-label">Allow reactions</div><div className="toggle-hint">Floating emoji reactions on the board</div></div>
+                <label className="toggle"><input type="checkbox" checked={form.allowReactions} onChange={e => set("allowReactions", e.target.checked)} /><span className="toggle-slider" /></label>
+              </div>
+              <div className="toggle-row">
+                <div><div className="toggle-label">Allow upvoting</div><div className="toggle-hint">▲ ▼ voting on cards after reveal</div></div>
+                <label className="toggle"><input type="checkbox" checked={form.allowVoting} onChange={e => set("allowVoting", e.target.checked)} /><span className="toggle-slider" /></label>
+              </div>
+            </div>
 
             <div className="modal-btns">
-              <button className="tool-btn" onClick={onClose}>Cancel</button>
+              <button className="btn btn-secondary" onClick={() => setPanel("list")}>Cancel</button>
               {saved
                 ? <span className="settings-saved">✓ Saved!</span>
-                : <button className="tool-btn primary" onClick={handleSave}>Save changes</button>
+                : <button className="btn btn-primary" onClick={handleSave}>{editingSession ? "Save Changes" : "Create Session →"}</button>
               }
             </div>
           </>
@@ -1549,34 +1655,41 @@ function getTimeOfDay() {
   return { greeting: "Burning the midnight oil?", emoji: "🌙" };
 }
 
-function JoinScreen({ sprintNumber, onJoin, joined, sprintDate }) {
-  const [name, setName] = useState("");
-  const [q1Val, setQ1Val] = useState("");
+function JoinScreen({ session, onJoin, joined, savedName }) {
+  const [name, setName] = useState(savedName || ""); const [q1Val, setQ1Val] = useState("");
   const { greeting, emoji } = getTimeOfDay();
+  const cutoff = sessionStore.getCutoff(session);
+  const dateLabel = session.date ? new Date(session.date + "T12:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "";
 
-  const handleJoin = () => {
-    const trimmed = name.trim().slice(0, 20);
-    if (!trimmed) return;
-    onJoin(trimmed, q1Val);
-  };
+  // If name already saved, show a simplified re-join screen
+  if (savedName) {
+    return (
+      <div className="join-wrap">
+        <div className="join-card">
+          <div className="join-logo"><span className="join-logo-dot" />RetroKit</div>
+          <div className="join-sprint">{session.name} · Sprint {session.sprintNumber}</div>
+          <div style={{ fontSize: 40, margin: "16px 0 8px" }}>{emoji}</div>
+          <div className="join-title">Welcome back, {savedName}!</div>
+          <div className="join-sub" style={{ marginBottom: 24 }}>You've already joined this session.</div>
+          <button className="join-btn" onClick={() => onJoin(savedName, "")}>Continue as {savedName} →</button>
+          <button onClick={() => { try { localStorage.removeItem(`rk_name_${session.id}`); } catch(e) {} }} style={{ marginTop: 12, background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer", fontSize: 12, fontFamily: "inherit", display: "block", width: "100%", textAlign: "center" }}>
+            Not {savedName}? Join as someone else
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="join-wrap">
       <div className="join-card">
         <div className="join-logo"><span className="join-logo-dot" />RetroKit</div>
-        <div className="join-sprint">Sprint {sprintNumber}{sprintDate ? ` · ${sprintDate}` : ""}</div>
+        <div className="join-sprint">{session.name} · Sprint {session.sprintNumber}{dateLabel ? ` · ${dateLabel}` : ""}</div>
         <div className="join-greeting">{emoji}</div>
         <div className="join-greeting-text">{greeting}! Join the retro session below.</div>
+        {cutoff && <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 16, background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 20, padding: "4px 12px", display: "inline-block" }}>⏰ Submissions close at {cutoff.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>}
         <div className="join-title">What should we call you?</div>
-        <input
-          className="join-input"
-          placeholder="Your name (max 20 chars)…"
-          value={name}
-          onChange={e => setName(e.target.value.slice(0, 20))}
-          onKeyDown={e => e.key === "Enter" && handleJoin()}
-          maxLength={20}
-          autoFocus
-        />
+        <input className="join-input" placeholder="Your name…" value={name} onChange={e => setName(e.target.value.slice(0, 20))} onKeyDown={e => e.key === "Enter" && name.trim() && onJoin(name.trim(), q1Val)} maxLength={20} autoFocus />
         {name.trim().length > 0 && (
           <div className="join-q1-section">
             <div className="join-q1-label">Optional · Q1</div>
@@ -1584,22 +1697,11 @@ function JoinScreen({ sprintNumber, onJoin, joined, sprintDate }) {
             <Q1Picker value={q1Val} onChange={setQ1Val} />
           </div>
         )}
-        <div style={{ marginTop: 20 }}>
-          <button className="join-btn" disabled={!name.trim()} onClick={handleJoin}>
-            Join Session →
-          </button>
-        </div>
+        <div style={{ marginTop: 18 }}><button className="join-btn" disabled={!name.trim()} onClick={() => onJoin(name.trim(), q1Val)}>Join Session →</button></div>
         {joined.length > 0 && (
           <div className="join-presence">
             <div className="join-presence-label">Already joined</div>
-            <div className="join-avatars">
-              {joined.map((p, i) => (
-                <div key={i} className="join-avatar">
-                  <div className="join-avatar-dot" style={{ background: AVATAR_COLORS[i % AVATAR_COLORS.length] }}>{p[0]}</div>
-                  <span className="join-avatar-name">{p}</span>
-                </div>
-              ))}
-            </div>
+            <div className="join-avatars">{joined.map((p, i) => (<div key={i} className="join-avatar"><div className="join-avatar-dot" style={{ background: AVATAR_COLORS[i % AVATAR_COLORS.length] }}>{p[0]}</div><span className="join-avatar-name">{p}</span></div>))}</div>
           </div>
         )}
       </div>
@@ -1609,113 +1711,295 @@ function JoinScreen({ sprintNumber, onJoin, joined, sprintDate }) {
 
 // ── App Shell ─────────────────────────────────────────────────────────────────
 
-export default function App() {
-  const [view, setView] = useState("submit");
+// ── Route detection ───────────────────────────────────────────────────────────
+const isAdminRoute = () => {
+  // Use hash-based routing since GitHub Pages can't serve arbitrary paths
+  return window.location.hash === "#admin" || window.location.hash.startsWith("#admin?");
+};
+
+// ── Admin App (facilitator only) ──────────────────────────────────────────────
+function AdminApp() {
+  runMigrationIfNeeded();
+  const [unlocked, setUnlocked] = useState(() => facilitatorStore.is());
+  const [pw, setPw] = useState(""); const [pwError, setPwError] = useState(false);
+  const [activeSession, setActiveSession] = useState(() => {
+    const sessions = sessionStore.list();
+    return sessions.length > 0 ? sessions[sessions.length - 1] : null;
+  });
+  const [allSessionsState, setAllSessionsState] = useState(() => sessionStore.list());
+  const allSessions = allSessionsState.length ? allSessionsState : sessionStore.list();
+  const [view, setView] = useState(() => {
+    try {
+      const sid = activeSession?.id;
+      const key = sid ? `rk_tab_${sid}` : "rk_tab_admin";
+      return localStorage.getItem(key) || "board";
+    } catch { return "board"; }
+  });
   const [showSettings, setShowSettings] = useState(false);
-  const [settings, setSettings] = useState(loadSettings);
-  const [currentUser, setCurrentUser] = useState(() => {
-    try { return localStorage.getItem("retrokit-name") || null; } catch { return null; }
-  });
-  const [joined, setJoined] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("retrokit-joined") || "[]"); } catch { return []; }
-  });
+  const [hasNewSubmissions, setHasNewSubmissions] = useState(false);
 
-  const [joinQ1, setJoinQ1] = useState("");
-  const [currentVibe, setCurrentVibe] = useState("");
+  // Load sessions from Supabase if localStorage is empty
+  useEffect(() => {
+    if (sessionStore.list().length === 0 && supabase) {
+      supabase.from("sessions").select("*").order("created_at", { ascending: false })
+        .then(({ data, error }) => {
+          if (error) { console.warn("load sessions:", error.message); return; }
+          if (data?.length) {
+            const mapped = data.map(lsSessionMap);
+            localStorage.setItem(LS_KEY, JSON.stringify(mapped));
+            setActiveSession(mapped[0]);
+            setAllSessionsState(mapped);
+          }
+        });
+    }
+  }, []);
 
-  const handleJoin = (name, q1Val) => {
-    try { localStorage.setItem("retrokit-name", name); } catch {}
-    const updatedJoined = joined.includes(name) ? joined : [...joined, name];
-    try { localStorage.setItem("retrokit-joined", JSON.stringify(updatedJoined)); } catch {}
-    setJoined(updatedJoined);
-    setCurrentUser(name);
-    if (q1Val) { setJoinQ1(q1Val); setCurrentVibe(q1Val); }
+  const handleSaveSettings = session => {
+    setActiveSession(session);
+    setAllSessionsState(sessionStore.list());
+    facilitatorStore.set();
   };
 
-  const sprintNumber = settings.sprintNumber;
-  const setSprintNumber = (fn) => setSettings(s => {
-    const next = { ...s, sprintNumber: typeof fn === "function" ? fn(s.sprintNumber) : fn };
-    saveSettings(next);
-    return next;
-  });
-
-  const handleSaveSettings = (newSettings) => {
-    saveSettings(newSettings);
-    setSettings(newSettings);
+  const handleSwitchSession = session => {
+    setActiveSession(session);
+    setView("board");
+    try { localStorage.setItem(`rk_tab_${session.id}`, "board"); } catch {}
   };
 
-  const cutoff = settings.cutoffDate && settings.cutoffTime
-    ? new Date(`${settings.cutoffDate}T${settings.cutoffTime}`)
-    : DEMO_CUTOFF;
+  const questions = activeSession ? QUESTIONS(activeSession.sprintNumber, Q3_VARIANTS[activeSession.q3Variant ?? 0]) : [];
 
-  // Override QUESTIONS to use settings q3Variant and members
-  const settingsQ3 = Q3_VARIANTS[settings.q3Variant] || Q3_VARIANTS[0];
-  const questionsWithSettings = (sprintNum) => [
-    { id: "q1", label: "Q1", prompt: "Describe the sprint using an emoji or gif", type: "emoji", color: "#FFD93D" },
-    { id: "q2", label: "Q2", prompt: "What were our standout achievements this sprint?", type: "text", color: "#6BCB77" },
-    { id: "q3", label: "Q3", prompt: settingsQ3, type: "text", color: "#FF6B6B" },
-    { id: "q4", label: "Q4", prompt: "Anything else? Is there anyone you'd like to give a shout-out to?", type: "text", color: "#4D96FF" },
-  ];
+  const unlock = () => {
+    if (pw === SETTINGS_PASSWORD) {
+      setUnlocked(true); setPwError(false);
+      facilitatorStore.set();
+    } else setPwError(true);
+  };
 
-  if (!currentUser) {
-    return (
-      <>
-        <style>{css}</style>
-        <JoinScreen
-          sprintNumber={settings.sprintNumber}
-          onJoin={handleJoin}
-          joined={joined}
-          sprintDate={settings.cutoffDate ? new Date(settings.cutoffDate + "T12:00:00").toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "2-digit" }) : ""}
-        />
-      </>
-    );
-  }
+  // Password wall
+  if (!unlocked) return (
+    <>
+      <style>{css}</style>
+      <div className="join-wrap">
+        <div className="join-card">
+          <div className="join-logo"><span className="join-logo-dot" />RetroKit</div>
+          <div style={{ fontSize: 36, margin: "16px 0 8px" }}>⚙️</div>
+          <div className="join-title">Facilitator Access</div>
+          <div className="join-sub" style={{ marginBottom: 24 }}>Enter the admin password to continue.</div>
+          <input className="join-input" type="password" placeholder="Password…" value={pw}
+            onChange={e => { setPw(e.target.value); setPwError(false); }}
+            onKeyDown={e => e.key === "Enter" && unlock()} autoFocus />
+          {pwError && <div style={{ color: "#f87171", fontSize: 13, marginBottom: 8 }}>Incorrect password</div>}
+          <button className="join-btn" onClick={unlock} style={{ marginTop: 8 }}>Enter →</button>
+          <div style={{ marginTop: 20 }}>
+            <a href="#" style={{ fontSize: 12, color: "var(--text-dim)", textDecoration: "none" }}>← Back to team view</a>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+
+  // No sessions yet → show settings
+  if (!activeSession) return (
+    <>
+      <style>{css}</style>
+      <SettingsModal
+        currentSession={null}
+        onSave={session => { setActiveSession(session); setAllSessionsState(sessionStore.list()); }}
+        onClose={() => {}}
+        onReset={() => { wipeAllData(); setActiveSession(null); }}
+      />
+    </>
+  );
 
   return (
     <>
       <style>{css}</style>
       <div className="app">
         <nav className="nav">
-          <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
-            <div className="nav-brand"><span className="nav-brand-dot" />RetroKit</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--bg-raised)", borderRadius: 20, padding: "4px 12px 4px 4px", border: "1px solid var(--border)" }}>
-              <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--or-red)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white" }}>{currentUser[0]}</div>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{currentUser}</span>
-              <button onClick={() => { try { localStorage.removeItem("retrokit-name"); } catch {} setCurrentUser(null); }} style={{ background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer", fontSize: 13, padding: 0, marginLeft: 2 }} title="Leave session">✕</button>
-            </div>
-            <div className="sprint-selector">
-              <button onClick={() => setSprintNumber(n => Math.max(1, n - 1))}>−</button>
-              <span>Sprint {sprintNumber}{settings.cutoffDate ? ` · ${new Date(settings.cutoffDate + "T12:00:00").toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "2-digit" })}` : ""}</span>
-              <button onClick={() => setSprintNumber(n => n + 1)}>+</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <div className="nav-brand"><span className="nav-brand-dot" />RetroKit <span style={{ fontSize: 10, color: "var(--red)", fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, marginLeft: 4 }}>Admin</span></div>
+            <div className="session-select-wrap">
+              <select className="session-select" value={activeSession.id} onChange={e => { const s = sessionStore.get(e.target.value); if (s) handleSwitchSession(s); }}>
+                {allSessions.map(s => <option key={s.id} value={s.id}>{s.name} · Sprint {s.sprintNumber}{s.date ? ` · ${s.date}` : ""}</option>)}
+              </select>
+              <span className="session-select-arrow">▾</span>
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div className="nav-tabs">
-              {[["submit", "📝 Submit"], ["board", "🗂 Board"], ["history", "📚 History"]].map(([v, label]) => (
+              {[["board", "Board"], ["submit", "Preview"]].map(([v, label]) => (
                 <button key={v} className={`nav-tab ${view === v ? "active" : ""}`} onClick={() => {
-                  try { window.history.replaceState({}, "", window.location.href.split("?")[0]); } catch {}
+                  try { if (activeSession?.id) localStorage.setItem(`rk_tab_${activeSession.id}`, v); } catch {}
                   setView(v);
-                }}>{label}</button>
+                }}>
+                  {label}
+                  {v === "board" && hasNewSubmissions && <span className="nav-tab-dot" title="New submissions" />}
+                </button>
               ))}
+              {hasNewSubmissions && (
+                <button className="refresh-btn" onClick={() => { setHasNewSubmissions(false); setView("board"); }} title="Refresh board">↻</button>
+              )}
             </div>
             <button className="settings-gear" onClick={() => setShowSettings(true)} title="Settings">⚙️</button>
           </div>
         </nav>
-        <CountdownBar cutoff={cutoff} />
-        {typeof window !== "undefined" && (window.__retroCutoff = cutoff) && null}
 
-        {view === "submit" && <SubmitView sprintNumber={sprintNumber} questions={questionsWithSettings(sprintNumber)} currentUser={currentUser} cutoff={cutoff} joinQ1={joinQ1} />}
-        {view === "board" && <BoardView sprintNumber={sprintNumber} members={joined} questions={questionsWithSettings(sprintNumber)} currentUser={currentUser} currentVibe={currentVibe || ""} />}
-        {view === "history" && <HistoryView onLoadSprint={(n) => { setSprintNumber(n); setView("board"); }} />}
+        <CountdownBar session={activeSession} />
 
-        {showSettings && (
-          <SettingsModal
-            settings={settings}
-            onSave={handleSaveSettings}
-            onClose={() => setShowSettings(false)}
-          />
-        )}
+        {view === "board" && <BoardView session={activeSession} members={[]} questions={questions} currentUser="__facilitator__" onNewSubmissions={() => setHasNewSubmissions(true)} />}
+        {view === "submit" && <SubmitView session={activeSession} questions={questions} currentUser="Facilitator" joinQ1="" />}
+
+        {showSettings && <SettingsModal
+          currentSession={activeSession}
+          onSave={handleSaveSettings}
+          onClose={() => setShowSettings(false)}
+          onReset={() => { wipeAllData(); setActiveSession(null); setShowSettings(false); }}
+        />}
       </div>
     </>
   );
+}
+
+// ── Team App (submit only) ────────────────────────────────────────────────────
+function TeamApp() {
+  runMigrationIfNeeded();
+
+  const [activeSession, setActiveSession] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sid = params.get("session");
+    if (sid) {
+      const local = sessionStore.get(sid);
+      if (local) return local;
+      const sc = params.get("sc");
+      if (sc) {
+        try { const session = JSON.parse(atob(sc)); sessionStore.save(session); return session; }
+        catch(e) { console.warn("Failed to decode session config", e); }
+      }
+      return null;
+    }
+    const sessions = sessionStore.list();
+    return sessions.length > 0 ? sessions[sessions.length - 1] : null;
+  });
+
+  // Load from Supabase if needed
+  useEffect(() => {
+    if (!activeSession && supabase) {
+      const params = new URLSearchParams(window.location.search);
+      const sid = params.get("session");
+      if (sid) {
+        supabase.from("sessions").select("*").eq("id", sid).single()
+          .then(({ data, error }) => {
+            if (error) { console.warn("load session:", error.message); return; }
+            if (data) { const s = lsSessionMap(data); sessionStore.save(s); setActiveSession(s); }
+          });
+      }
+    }
+  }, []);
+
+  const [currentUser, setCurrentUser] = useState(() => {
+    if (!activeSession) return null;
+    try { return localStorage.getItem(`rk_name_${activeSession.id}`) || null; } catch { return null; }
+  });
+  const [joined, setJoined] = useState(() => {
+    if (!activeSession) return [];
+    try { return JSON.parse(localStorage.getItem(`rk_joined_${activeSession.id}`) || "[]"); } catch { return []; }
+  });
+  const [joinQ1, setJoinQ1] = useState("");
+
+  const handleJoin = (name, q1Val) => {
+    try {
+      localStorage.setItem(`rk_name_${activeSession.id}`, name);
+      const updated = joined.includes(name) ? joined : [...joined, name];
+      localStorage.setItem(`rk_joined_${activeSession.id}`, JSON.stringify(updated));
+      setJoined(updated);
+    } catch(e) { console.warn(e); }
+    setCurrentUser(name); if (q1Val) setJoinQ1(q1Val);
+  };
+
+  const questions = activeSession ? QUESTIONS(activeSession.sprintNumber, Q3_VARIANTS[activeSession.q3Variant ?? 0]) : [];
+
+  // No session found
+  if (!activeSession) return (
+    <>
+      <style>{css}</style>
+      <div className="join-wrap">
+        <div className="join-card">
+          <div className="join-logo"><span className="join-logo-dot" />RetroKit</div>
+          <div style={{ fontSize: 40, margin: "16px 0 12px" }}>🔗</div>
+          <div className="join-title">Session not found</div>
+          <div className="join-sub">Ask your facilitator for the correct session link.</div>
+        </div>
+      </div>
+    </>
+  );
+
+  const savedName = (() => { try { return localStorage.getItem(`rk_name_${activeSession.id}`) || null; } catch { return null; } })();
+  if (!currentUser) return (
+    <>
+      <style>{css}</style>
+      <JoinScreen session={activeSession} onJoin={handleJoin} joined={joined} savedName={savedName} />
+    </>
+  );
+
+  const [view, setView] = useState(() => {
+    try {
+      const sid = activeSession?.id;
+      const key = sid ? `rk_tab_${sid}` : "rk_tab";
+      return localStorage.getItem(key) || "submit";
+    } catch { return "submit"; }
+  });
+  const [hasNewSubmissions, setHasNewSubmissions] = useState(false);
+
+  const saveTab = (v) => {
+    try { if (activeSession?.id) localStorage.setItem(`rk_tab_${activeSession.id}`, v); } catch {}
+    setView(v);
+  };
+
+  return (
+    <>
+      <style>{css}</style>
+      <div className="app">
+        <nav className="nav">
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div className="nav-brand"><span className="nav-brand-dot" />RetroKit</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div className="nav-tabs">
+              {[["submit", "Submit"], ["board", "Board"]].map(([v, label]) => (
+                <button key={v} className={`nav-tab ${view === v ? "active" : ""}`} onClick={() => saveTab(v)}>
+                  {label}
+                  {v === "board" && hasNewSubmissions && <span className="nav-tab-dot" title="New submissions" />}
+                </button>
+              ))}
+              {hasNewSubmissions && (
+                <button className="refresh-btn" onClick={() => { setHasNewSubmissions(false); setView("board"); }} title="Refresh board">↻</button>
+              )}
+            </div>
+            <div className="user-chip">
+              <div className="user-chip-dot">{currentUser[0]}</div>
+              <span className="user-chip-name">{currentUser}</span>
+              <button className="user-chip-x" onClick={() => { try { localStorage.removeItem(`rk_name_${activeSession.id}`); } catch {} setCurrentUser(null); }} title="Leave session">✕</button>
+            </div>
+          </div>
+        </nav>
+        <CountdownBar session={activeSession} />
+        {view === "submit" && <SubmitView session={activeSession} questions={questions} currentUser={currentUser} joinQ1={joinQ1} />}
+        {view === "board" && <BoardView session={activeSession} members={joined} questions={questions} currentUser={currentUser} onNewSubmissions={() => setHasNewSubmissions(true)} />}
+        {/* Subtle admin link */}
+        <div style={{ textAlign: "center", padding: "32px 0 16px" }}>
+          <a href="#admin" style={{ fontSize: 11, color: "var(--text-dim)", textDecoration: "none", opacity: 0.4 }}>facilitator access</a>
+        </div>
+      </div>
+    </>
+  );
+}
+
+export default function App() {
+  const [hash, setHash] = useState(() => window.location.hash);
+  useEffect(() => {
+    const onHash = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  return (hash === "#admin" || hash.startsWith("#admin?")) ? <AdminApp /> : <TeamApp />;
 }
