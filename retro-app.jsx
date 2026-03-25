@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
+import DOMPurify from "dompurify";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
@@ -28,8 +29,8 @@ const EMOJIS = ["🚀","🔥","💪","🎯","⚡","😤","😅","🌊","🐛","�
 const CARD_COLORS = ["#E8003D","#10b981","#6366f1","#f59e0b","#ec4899","#06b6d4","#8b5cf6","#14b8a6"];
 const AVATAR_COLORS = ["#E8003D","#6366f1","#10b981","#f59e0b","#ec4899","#06b6d4","#8b5cf6","#14b8a6"];
 
-const TENOR_KEY = import.meta.env.VITE_TENOR_KEY || "AIzaSyAyimkuYQYF_FXVALexPuGQctUWRURdCDY";
-const GIPHY_KEY = import.meta.env.VITE_GIPHY_KEY || "Lat2X82BQoZI8UZnG0cHU2QnlITbWYr3";
+const TENOR_KEY = import.meta.env.VITE_TENOR_KEY || "";
+const GIPHY_KEY = import.meta.env.VITE_GIPHY_KEY || "";
 
 function randomColor() { return CARD_COLORS[Math.floor(Math.random() * CARD_COLORS.length)]; }
 function uid() { return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2, 9); }
@@ -48,7 +49,7 @@ const LS_KEY = "rk_sessions_v2";
 
 // Local helpers
 function lsSessions() { try { return JSON.parse(localStorage.getItem(LS_KEY) || "[]"); } catch { return []; } }
-function lsSessionMap(s) { return { id: s.id, name: s.name, sprintNumber: s.sprint_number ?? s.sprintNumber, date: s.date || "", cutoffDate: s.cutoff_date ?? s.cutoffDate ?? "", cutoffTime: s.cutoff_time ?? s.cutoffTime ?? "", q3Variant: s.q3_variant ?? s.q3Variant ?? 0, allowReactions: s.allow_reactions ?? s.allowReactions ?? false, allowVoting: s.allow_voting ?? s.allowVoting ?? false }; }
+function lsSessionMap(s) { return { id: s.id, name: s.name, sprintNumber: s.sprint_number ?? s.sprintNumber, date: s.date || "", cutoffDate: s.cutoff_date ?? s.cutoffDate ?? "", cutoffTime: s.cutoff_time ?? s.cutoffTime ?? "", q3Variant: s.q3_variant ?? s.q3Variant ?? 0, allowReactions: s.allow_reactions ?? s.allowReactions ?? false, allowVoting: s.allow_voting ?? s.allowVoting ?? false, joinPassword: s.join_password ?? s.joinPassword ?? "" }; }
 
 const sessionStore = {
   list() { return lsSessions(); },
@@ -66,7 +67,8 @@ const sessionStore = {
         id: session.id, name: session.name, sprint_number: session.sprintNumber,
         date: session.date || null, cutoff_date: session.cutoffDate || null,
         cutoff_time: session.cutoffTime || null, q3_variant: session.q3Variant ?? 0,
-        allow_reactions: session.allowReactions ?? false, allow_voting: session.allowVoting ?? false
+        allow_reactions: session.allowReactions ?? false, allow_voting: session.allowVoting ?? false,
+        join_password: session.joinPassword || null
       }).then(({ error }) => { if (error) console.warn("session save:", error.message); });
     }
   },
@@ -611,7 +613,7 @@ function StickyCard({ card, hidden, onGroup, grouped, groupName, revealed, curre
       {card.type === "emoji" && isGif && !hidden && <div style={{ borderRadius: 6, overflow: "hidden", lineHeight: 0 }}><img src={card.content.url} alt="gif" style={{ width: "100%", borderRadius: 6 }} /></div>}
       {card.type === "emoji" && isGif && hidden && <div className="sticky-emoji">🎬</div>}
       {card.type !== "emoji" && (
-        <div className="sticky-content">{hidden ? <span style={{ color: "var(--text-dim)", letterSpacing: 2 }}>● ● ● ● ●</span> : (typeof card.content === "string" && card.content.startsWith("<") ? <span dangerouslySetInnerHTML={{ __html: card.content }} /> : card.content)}</div>
+        <div className="sticky-content">{hidden ? <span style={{ color: "var(--text-dim)", letterSpacing: 2 }}>● ● ● ● ●</span> : (typeof card.content === "string" && card.content.startsWith("<") ? <span dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(card.content) }} /> : card.content)}</div>
       )}
       {!hidden && <div className="sticky-author">— {card.author}</div>}
       {revealed && allowVoting && (
@@ -1009,6 +1011,20 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
         const r = payload.old;
         setVotes(prev => { const next = { ...prev }; if (next[r.card_id]) delete next[r.card_id][r.user_name]; return next; });
       })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "free_cards", filter: `session_id=eq.${sessionId}` }, payload => {
+        const r = payload.new;
+        setFreeCards(prev => {
+          if (prev.find(c => c.id === r.id)) return prev;
+          return [...prev, { id: r.id, content: r.content, author: r.author, color: r.color, x: r.x, y: r.y }];
+        });
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "free_cards", filter: `session_id=eq.${sessionId}` }, payload => {
+        const r = payload.new;
+        setFreeCards(prev => prev.map(c => c.id === r.id ? { ...c, content: r.content, x: r.x, y: r.y } : c));
+      })
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "free_cards", filter: `session_id=eq.${sessionId}` }, payload => {
+        setFreeCards(prev => prev.filter(c => c.id !== payload.old.id));
+      })
       .subscribe();
 
     // Presence channel — who's on the board right now
@@ -1025,24 +1041,6 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
       });
     presenceChannelRef.current = presenceChannel;
 
-      // Free cards real-time
-      const freeCardsChannel = supabase.channel(`free-cards-${sessionId}`)
-        .on("postgres_changes", { event: "INSERT", schema: "public", table: "free_cards", filter: `session_id=eq.${sessionId}` }, payload => {
-          const r = payload.new;
-          setFreeCards(prev => {
-            if (prev.find(c => c.id === r.id)) return prev;
-            return [...prev, { id: r.id, content: r.content, author: r.author, color: r.color, x: r.x, y: r.y }];
-          });
-        })
-        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "free_cards", filter: `session_id=eq.${sessionId}` }, payload => {
-          const r = payload.new;
-          setFreeCards(prev => prev.map(c => c.id === r.id ? { ...c, content: r.content, x: r.x, y: r.y } : c));
-        })
-        .on("postgres_changes", { event: "DELETE", schema: "public", table: "free_cards", filter: `session_id=eq.${sessionId}` }, payload => {
-          setFreeCards(prev => prev.filter(c => c.id !== payload.old.id));
-        })
-        .subscribe();
-
     // Broadcast channel for ephemeral reactions — same channel for send + receive
     const reactionChannel = supabase.channel(`reactions-${sessionId}`)
       .on("broadcast", { event: "reaction" }, ({ payload }) => {
@@ -1058,7 +1056,6 @@ function BoardView({ session, members, questions, currentUser, onNewSubmissions 
     return () => {
       subscribedRef.current = null; // reset so re-mount works
       supabase.removeChannel(dbChannel);
-      supabase.removeChannel(freeCardsChannel);
       if (presenceChannelRef.current) presenceChannelRef.current.untrack().then(() => supabase.removeChannel(presenceChannelRef.current));
       supabase.removeChannel(reactionChannel);
       reactionChannelRef.current = null;
@@ -1460,7 +1457,7 @@ function SettingsModal({ currentSession, onSave, onClose, onReset }) {
   // "list" = sessions overview, "edit" = create/edit form
   const [panel, setPanel] = useState("list");
   const [editingSession, setEditingSession] = useState(null); // null = new
-  const [form, setForm] = useState({ name: "", sprintNumber: 1, date: "", cutoffDate: "", cutoffTime: "", q3Variant: 0, allowReactions: false, allowVoting: false });
+  const [form, setForm] = useState({ name: "", sprintNumber: 1, date: "", cutoffDate: "", cutoffTime: "", q3Variant: 0, allowReactions: false, allowVoting: false, joinPassword: "" });
   const [saved, setSaved] = useState(false);
   const [copiedId, setCopiedId] = useState(null);
 
@@ -1482,7 +1479,7 @@ function SettingsModal({ currentSession, onSave, onClose, onReset }) {
   const openEdit = (s, e) => {
     e.stopPropagation();
     setEditingSession(s);
-    setForm({ name: s.name, sprintNumber: s.sprintNumber, date: s.date || "", cutoffDate: s.cutoffDate || "", cutoffTime: s.cutoffTime || "", q3Variant: s.q3Variant ?? 0, allowReactions: s.allowReactions ?? false, allowVoting: s.allowVoting ?? false });
+    setForm({ name: s.name, sprintNumber: s.sprintNumber, date: s.date || "", cutoffDate: s.cutoffDate || "", cutoffTime: s.cutoffTime || "", q3Variant: s.q3Variant ?? 0, allowReactions: s.allowReactions ?? false, allowVoting: s.allowVoting ?? false, joinPassword: s.joinPassword || "" });
     setSaved(false);
     setPanel("edit");
   };
@@ -1492,7 +1489,7 @@ function SettingsModal({ currentSession, onSave, onClose, onReset }) {
   const handleSave = async () => {
     const isNew = !editingSession;
     const id = editingSession?.id || uid();
-    const session = { id, name: form.name || "Untitled Session", sprintNumber: parseInt(form.sprintNumber) || 1, date: form.date, cutoffDate: form.cutoffDate, cutoffTime: form.cutoffTime, q3Variant: parseInt(form.q3Variant) || 0, allowReactions: form.allowReactions, allowVoting: form.allowVoting };
+    const session = { id, name: form.name || "Untitled Session", sprintNumber: parseInt(form.sprintNumber) || 1, date: form.date, cutoffDate: form.cutoffDate, cutoffTime: form.cutoffTime, q3Variant: parseInt(form.q3Variant) || 0, allowReactions: form.allowReactions, allowVoting: form.allowVoting, joinPassword: form.joinPassword || "" };
     if (isNew) {
       wipeSessionData(id);
       // Also delete from Supabase if re-creating
@@ -1639,6 +1636,14 @@ function SettingsModal({ currentSession, onSave, onClose, onReset }) {
                 <label className="toggle"><input type="checkbox" checked={form.allowVoting} onChange={e => set("allowVoting", e.target.checked)} /><span className="toggle-slider" /></label>
               </div>
             </div>
+            <div className="settings-section">
+              <div className="settings-section-title">Access Control</div>
+              <div className="settings-row">
+                <label className="label">Join password <span style={{ color: "var(--text-dim)", fontWeight: 400 }}>(optional)</span></label>
+                <input className="input" type="text" placeholder="Leave blank for open access…" value={form.joinPassword} onChange={e => set("joinPassword", e.target.value)} />
+                <div className="settings-hint">If set, team members must enter this password when joining the session.</div>
+              </div>
+            </div>
 
             <div className="modal-btns">
               <button className="btn btn-secondary" onClick={() => setPanel("list")}>Cancel</button>
@@ -1666,6 +1671,7 @@ function getTimeOfDay() {
 
 function JoinScreen({ session, onJoin, joined, savedName }) {
   const [name, setName] = useState(savedName || ""); const [q1Val, setQ1Val] = useState("");
+  const [joinPw, setJoinPw] = useState(""); const [joinPwError, setJoinPwError] = useState(false);
   const { greeting, emoji } = getTimeOfDay();
   const cutoff = sessionStore.getCutoff(session);
   const dateLabel = session.date ? new Date(session.date + "T12:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "";
@@ -1706,7 +1712,21 @@ function JoinScreen({ session, onJoin, joined, savedName }) {
             <Q1Picker value={q1Val} onChange={setQ1Val} />
           </div>
         )}
-        <div style={{ marginTop: 18 }}><button className="join-btn" disabled={!name.trim()} onClick={() => onJoin(name.trim(), q1Val)}>Join Session →</button></div>
+        {session.joinPassword && (
+          <div style={{ marginBottom: 12 }}>
+            <input className="join-input" type="password" placeholder="Session password…"
+              value={joinPw} onChange={e => { setJoinPw(e.target.value); setJoinPwError(false); }}
+              onKeyDown={e => e.key === "Enter" && name.trim() && joinPw === session.joinPassword && onJoin(name.trim(), q1Val)}
+              style={{ marginBottom: 4 }} />
+            {joinPwError && <div style={{ color: "#f87171", fontSize: 12, textAlign: "center", marginBottom: 4 }}>Incorrect password</div>}
+          </div>
+        )}
+        <div style={{ marginTop: 8 }}><button className="join-btn"
+          disabled={!name.trim() || (session.joinPassword && joinPw !== session.joinPassword)}
+          onClick={() => {
+            if (session.joinPassword && joinPw !== session.joinPassword) { setJoinPwError(true); return; }
+            onJoin(name.trim(), q1Val);
+          }}>Join Session →</button></div>
         {joined.length > 0 && (
           <div className="join-presence">
             <div className="join-presence-label">Already joined</div>
